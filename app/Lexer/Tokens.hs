@@ -18,6 +18,9 @@ data TokenInfo = TokenInfo {
   }
   deriving (Show, Eq)
 
+instance Ord TokenInfo where
+   TokenInfo{token_type = x} <= TokenInfo{token_type = y} = x <= y --just let it depend on the ord of the token
+
 --- Used for testing and
 tokenInfoTuple :: TokenInfo -> (String, String, (Int, Int), (Int, Int))
 tokenInfoTuple tok = (,,,) <$>
@@ -40,7 +43,7 @@ tokenInfoToken =  T.unpack . T.toUpper . T.pack . show . token_type
 --TODO: implement the rest of these in lexer.x as well.
 data Token =
       Name
-    | Number
+    | Number Int
     | String
     | Op
     | Lpar
@@ -65,4 +68,4 @@ data Token =
     | Indent
     | Dedent
     | Comment
-    deriving (Eq, Show)
+    deriving (Eq, Show,Ord)

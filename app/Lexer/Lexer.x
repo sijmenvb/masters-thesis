@@ -31,7 +31,7 @@ $not_newline = ~$newline
 
 
 tokens :-
-      @number {action Number}
+      @number {numberAction}
       @identifier {action Name}
       \n$white_no_nl* {startWhite}
        $white_no_nl+ ;   -- ignote this since we only care up significant white spaces (leading white spaces)

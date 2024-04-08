@@ -16,6 +16,7 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Lexer.Tokens
 import RIO
+import Prelude (read)
 
 -- first step is to decide what our AlexInput type is going to be.
 -- Going with general practices(wrapper examples), we will have the following
@@ -157,6 +158,20 @@ action tok inp inp_len = do
        -- this has new updated input
        n_inp@(AlexPosn _ nline ncol,c, rest,s) <- alexGetInput
        let token_info = constructToken tok inp inp_len n_inp
+       userState <- alexGetUserState
+       alexSetUserState $ userState {userStatePrevToken=token_type token_info}
+       return token_info
+
+
+
+numberAction :: AlexAction TokenInfo
+numberAction inp inp_len = do
+       -- this has new updated input
+       n_inp@(AlexPosn _ nline ncol,c, rest,s) <- alexGetInput
+       
+       -- Here i use a trick where tokenStr can be lazily determined before we actually need the Number as argument. I probably shouldn't code like this.
+       let token_info@(TokenInfo _ tokenStr _ _) = constructToken (Number $ read $ T.unpack tokenStr) inp inp_len n_inp
+       
        userState <- alexGetUserState
        alexSetUserState $ userState {userStatePrevToken=token_type token_info}
        return token_info
@@ -320,6 +335,8 @@ commentAction inp inp_len = do
         start_pos = start_pos,
         end_pos = end_pos
       }
+
+
 
 -- whenever we encounter a {- keep taking untill we see a -} (accounting for nested comments)
 multiLineCommentAction :: AlexInput -> Int -> Alex TokenInfo

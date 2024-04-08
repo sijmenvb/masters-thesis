@@ -1,4 +1,4 @@
-fun1 :: Int -> Bool
+fun1::Int->Bool
 fun1 x = True
 
 val :: Int

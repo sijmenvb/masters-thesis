@@ -6,7 +6,7 @@ main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
   contents <- readFile "./test programs/simple.hs"
-  runAndPrettyPrintLexer contents
+  myTest
 
 
 fun :: Num a => a -> a
