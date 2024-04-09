@@ -6,7 +6,7 @@
 {-# HLINT ignore "Eta reduce" #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
-module Parser where
+module Parser.ParserBase where
 
 import qualified Data.List as DL
 import Data.List.NonEmpty (NonEmpty (..))

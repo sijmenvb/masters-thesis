@@ -1,5 +1,5 @@
 module Main where
-import Parser
+import Parser.ParserBase
 import Lexer.LexerRunner 
 import Text.Megaparsec
 
