@@ -140,9 +140,9 @@ constructToken :: Token -> AlexInput -> Int -> AlexInput -> TokenInfo
 constructToken tok inp inp_len n_inp =
   let (AlexPosn _ line col, _, _, s) = inp
       (AlexPosn _ nline ncol, _c, _rest, _s) = n_inp -- new input in state
-      start_pos = (line, col - 1)
+      start_pos = (line, col)
       tok_str = T.pack $ take inp_len s
-      end_pos = (nline, ncol - 1)
+      end_pos = (nline, ncol)
    in TokenInfo
         { token_type = tok,
           token_string = tok_str,

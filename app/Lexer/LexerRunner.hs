@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use uncurry" #-}
 
 module Lexer.LexerRunner where
 
@@ -11,7 +13,6 @@ import qualified Data.List as L
 import qualified Data.Text as T
 import Lexer.Lexer
 import Lexer.Tokens
-import Lexer.LexerUtil
 --- Alex related data structures copied from generated Alex file --
 
 

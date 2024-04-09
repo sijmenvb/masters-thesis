@@ -2,6 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Eta reduce" #-}
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Parser where
 
@@ -10,7 +13,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
 import Data.Proxy
 import qualified Data.Set as Set
-import Data.Text (unpack)
+import Data.Text (length, unpack)
 import Data.Void
 import Lexer.Tokens as Tokens
 import Text.Megaparsec
@@ -23,10 +26,24 @@ data WithPos a = WithPos
   }
   deriving (Eq, Ord, Show)
 
+data WithSimplePos a = WithSimplePos
+  { start_pos :: (Int, Int),
+    end_pos :: (Int, Int),
+    value :: a
+  }
+  deriving (Show)
+
 data MyStream = MyStream
   { myStreamInput :: String, -- for showing offending lines
     unMyStream :: [WithPos TokenInfo]
   }
+
+tokensToParsableString :: String -> [TokenInfo] -> MyStream
+tokensToParsableString source tokens = MyStream source (map liftTokenInfo tokens)
+
+liftTokenInfo :: TokenInfo -> WithPos TokenInfo
+liftTokenInfo tok@TokenInfo {start_pos = (lineBegin, columnBegin), end_pos = (lineEnd, columnEnd), token_string = str} =
+  WithPos (SourcePos "" (mkPos lineBegin) (mkPos columnBegin)) (SourcePos "" (mkPos lineEnd) (mkPos columnEnd)) (Data.Text.length str) tok
 
 instance Stream MyStream where
   type Token MyStream = WithPos TokenInfo
@@ -35,7 +52,7 @@ instance Stream MyStream where
   tokenToChunk Proxy x = [x]
   tokensToChunk Proxy xs = xs
   chunkToTokens Proxy = id
-  chunkLength Proxy = length
+  chunkLength Proxy = Prelude.length
   chunkEmpty Proxy = null
   take1_ (MyStream _ []) = Nothing
   take1_ (MyStream str (t : ts)) =
@@ -59,7 +76,7 @@ instance Stream MyStream where
 
 instance VisualStream MyStream where
   showTokens Proxy =
-    DL.intercalate " "
+    unwords
       . NE.toList
       . fmap (showMyToken . tokenVal)
   tokensLength Proxy xs = sum (tokenLength <$> xs)
@@ -122,21 +139,22 @@ pToken c = token test (Set.singleton . Tokens . nes . liftMyToken $ c)
         else Nothing
     nes x = x :| []
 
-pInt :: Parser Int
+pInt :: Parser (WithSimplePos Int)
 pInt = token test Set.empty <?> "integer"
   where
-    test (WithPos _ _ _ TokenInfo {token_type = (Number n)}) = Just n
+    test (WithPos _ _ _ TokenInfo {token_type = (Number n), start_pos = start_pos, end_pos = end_pos}) =
+      Just $ WithSimplePos start_pos end_pos n
     test _ = Nothing
 
 liftToken :: Tokens.Token -> TokenInfo
 liftToken tok = TokenInfo tok "" (0, 0) (0, 0)
 
-pSum :: Parser (Int, Int)
+pSum :: Parser (WithSimplePos (Int, Int))
 pSum = do
-  a <- pInt
+  WithSimplePos start _ a <- pInt
   _ <- pToken $ liftToken Plus
-  b <- pInt
-  return (a, b)
+  WithSimplePos _ end b <- pInt
+  return (WithSimplePos start end (a, b))
 
 exampleStream :: MyStream
 exampleStream =
@@ -150,4 +168,5 @@ exampleStream =
     at l c = WithPos (at' l c) (at' l (c + 1)) 2
     at' l c = SourcePos "" (mkPos l) (mkPos c)
 
+myTest :: IO ()
 myTest = parseTest (pSum <* eof) exampleStream
