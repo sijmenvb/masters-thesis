@@ -7,3 +7,5 @@ We are using the [megaparsec](https://hackage.haskell.org/package/megaparsec) li
 ## Structure
 In `Parsec/ParsecBase` we hook up the token stream to megaparsec and provide some basic parsers.
 In `Parsec/Parsec` we will put the parser for our grammar.
+
+## Grammar

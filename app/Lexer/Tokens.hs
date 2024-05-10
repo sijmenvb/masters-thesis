@@ -16,7 +16,10 @@ data TokenInfo = TokenInfo
     start_pos :: (Int, Int),
     end_pos :: (Int, Int)
   }
-  deriving (Show, Eq)
+  deriving ( Eq)
+
+instance Show TokenInfo where 
+  show tok = show $ token_type tok
 
 instance Ord TokenInfo where
   TokenInfo {token_type = x} <= TokenInfo {token_type = y} = x <= y -- just let it depend on the ord of the token

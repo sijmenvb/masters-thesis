@@ -1,7 +1,8 @@
 module Main where
 import Parser.ParserBase
-import Lexer.LexerRunner 
+import Lexer.LexerRunner
 import Text.Megaparsec
+import Parser.Parser
 
 {- 
 main :: IO ()
@@ -19,7 +20,10 @@ main = do
   case maybeParsedTokens of
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
-      parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)
+       let sections = splitIntoSections parsedTokens
+       in print sections
+
+      --parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)
 
 
 fun :: Num a => a -> a
