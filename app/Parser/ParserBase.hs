@@ -139,10 +139,17 @@ pToken c = do
   return $ WithSimplePos start_pos end_pos tok
   where
     test (WithPos {tokenVal = x}) =
-      if token_type x == token_type (liftToken c)
-        then Just x
-        else Nothing
+      case (token_type x, token_type (liftToken c)) of
+        --we don't care for exact names when matching names.
+        (Name _,Name _) -> Just x
+        (tok1, tok2) ->
+          if tok1 == tok2
+            then Just x
+            else Nothing
     nes x = x :| []
+
+pName :: Parser (WithSimplePos Tokens.Token)
+pName = pToken (Name "")
 
 pInt :: Parser (WithSimplePos Int)
 pInt = token test Set.empty <?> "integer"

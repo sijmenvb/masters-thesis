@@ -1,11 +1,12 @@
 module Parser.Parser where
 
 import Lexer.Tokens
-import Lexer.Tokens (Token (EqualsSign, FalseToken, Name))
+import Lexer.Tokens (Token (EqualsSign, FalseToken, Name, Rpar))
 import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec
 import Text.Megaparsec (many)
+import Parser.ParserBase (WithSimplePos(WithSimplePos), pInt)
 
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
 splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
@@ -22,11 +23,20 @@ splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
     splitIntoSections' acc _ [] = [acc]
 
 pFunctionDefinition = do
-  WithSimplePos start _ name <- pToken (Name "")
-  labels <- many (pToken (Name ""))
+  WithSimplePos start _ name <- pName
+  labels <- many pName
   pToken EqualsSign
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
-  keepPos (Bool True) <$> pToken TrueToken
-    <|> keepPos (Bool False) <$> pToken FalseToken
+  let pBool =
+        keepPos (Bool True) <$> pToken TrueToken
+          <|> keepPos (Bool False) <$> pToken FalseToken
+      pExprInt = Int <$> pInt
+      pParentheses = do 
+        WithSimplePos start _ _ <- pToken Lpar
+        expr <- pExpr
+        WithSimplePos _ end _ <- pToken Rpar
+        return $ WithSimplePos start end $ Parentheses expr
+      pLabel = pName
+   in pParentheses <|> pBool
