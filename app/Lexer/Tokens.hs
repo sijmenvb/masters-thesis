@@ -46,7 +46,7 @@ tokenInfoToken = T.unpack . T.toUpper . T.pack . show . token_type
 
 -- TODO: implement the rest of these in lexer.x as well.
 data Token
-  = Name
+  = Name String
   | Number Int
   | String
   | Op

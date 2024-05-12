@@ -34,7 +34,7 @@ tokens :-
       "True" { action TrueToken }
       "False" { action FalseToken }
       @number {numberAction}
-      @identifier {action Name}
+      @identifier {stringAction Name}
       \n$white_no_nl* {startWhite}
        $white_no_nl+ ;   -- ignote this since we only care up significant white spaces (leading white spaces)
       "("   { action Lpar }

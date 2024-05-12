@@ -1,7 +1,11 @@
 module Parser.Parser where
 
 import Lexer.Tokens
+import Lexer.Tokens (Token (EqualsSign, FalseToken, Name))
 import Parser.ParserBase
+import Parser.Types
+import Text.Megaparsec
+import Text.Megaparsec (many)
 
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
 splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
@@ -16,3 +20,13 @@ splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
       _ -> splitIntoSections' (tok1 : acc) depth (tok2 : list)
     splitIntoSections' acc _ [tok] = [tok : acc]
     splitIntoSections' acc _ [] = [acc]
+
+pFunctionDefinition = do
+  WithSimplePos start _ name <- pToken (Name "")
+  labels <- many (pToken (Name ""))
+  pToken EqualsSign
+
+pExpr :: Parser (WithSimplePos Expr)
+pExpr =
+  keepPos (Bool True) <$> pToken TrueToken
+    <|> keepPos (Bool False) <$> pToken FalseToken

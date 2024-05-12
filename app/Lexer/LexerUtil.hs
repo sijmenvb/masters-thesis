@@ -162,7 +162,17 @@ action tok inp inp_len = do
        alexSetUserState $ userState {userStatePrevToken=token_type token_info}
        return token_info
 
-
+stringAction ::(String -> Token) ->  AlexAction TokenInfo
+stringAction constructor inp inp_len = do
+       -- this has new updated input
+       n_inp@(AlexPosn _ nline ncol,c, rest,s) <- alexGetInput
+       
+       -- Here i use a trick where tokenStr can be lazily determined before we actually need the Number as argument. I probably shouldn't code like this.
+       let token_info@(TokenInfo _ tokenStr _ _) = constructToken (constructor $ T.unpack tokenStr) inp inp_len n_inp
+       
+       userState <- alexGetUserState
+       alexSetUserState $ userState {userStatePrevToken=token_type token_info}
+       return token_info
 
 numberAction :: AlexAction TokenInfo
 numberAction inp inp_len = do
