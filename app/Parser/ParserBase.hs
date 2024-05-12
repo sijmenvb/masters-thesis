@@ -2,9 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Parser.ParserBase where
 
@@ -32,6 +32,9 @@ data WithSimplePos a = WithSimplePos
     value :: a
   }
   deriving (Show)
+
+keepPos :: a1 -> WithSimplePos a2 -> WithSimplePos a1
+keepPos val (WithSimplePos start end _) = WithSimplePos start end val
 
 data MyStream = MyStream
   { myStreamInput :: String, -- for showing offending lines
@@ -130,11 +133,13 @@ liftMyToken myToken = WithPos pos pos 0 myToken
   where
     pos = initialPos ""
 
-pToken :: TokenInfo -> Parser TokenInfo
-pToken c = token test (Set.singleton . Tokens . nes . liftMyToken $ c)
+pToken :: Tokens.Token -> Parser (WithSimplePos Tokens.Token)
+pToken c = do
+  (TokenInfo {token_type = tok, start_pos = start_pos, end_pos = end_pos}) <- token test (Set.singleton . Tokens . nes . liftMyToken $ liftToken c)
+  return $ WithSimplePos start_pos end_pos tok
   where
     test (WithPos {tokenVal = x}) =
-      if token_type x == token_type c
+      if token_type x == token_type (liftToken c)
         then Just x
         else Nothing
     nes x = x :| []
@@ -152,7 +157,7 @@ liftToken tok = TokenInfo tok "" (0, 0) (0, 0)
 pSum :: Parser (WithSimplePos (Int, Int))
 pSum = do
   WithSimplePos start _ a <- pInt
-  _ <- pToken $ liftToken Plus
+  _ <- pToken Plus
   WithSimplePos _ end b <- pInt
   return (WithSimplePos start end (a, b))
 
