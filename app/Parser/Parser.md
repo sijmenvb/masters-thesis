@@ -9,3 +9,7 @@ In `Parsec/ParsecBase` we hook up the token stream to megaparsec and provide som
 In `Parsec/Parsec` we will put the parser for our grammar.
 
 ## Grammar
+
+## Oddities
+### not matching exact names
+`pToken` usually matches only exactly the token given, an exception is made for `Name String` tokens where we do not require a match on the String part. here we accept any name token. This is because there is no reason to match on a specific name since these names can always be changed. 
