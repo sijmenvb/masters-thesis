@@ -72,4 +72,6 @@ data Token
   | Indent
   | Dedent
   | Comment
+  | TrueToken
+  | FalseToken
   deriving (Eq, Show, Ord)

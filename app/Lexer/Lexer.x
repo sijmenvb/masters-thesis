@@ -31,6 +31,8 @@ $not_newline = ~$newline
 
 
 tokens :-
+      "True" { action TrueToken }
+      "False" { action FalseToken }
       @number {numberAction}
       @identifier {action Name}
       \n$white_no_nl* {startWhite}
@@ -50,6 +52,7 @@ tokens :-
       "="   { action EqualsSign }
       @commentline  { commentAction }
       "{-"  { multiLineCommentAction }
+      
 {
 
 -- adapted from https://www.haskell.org/alex/doc/html/wrappers.html
