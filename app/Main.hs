@@ -1,16 +1,22 @@
 module Main where
-import Parser.ParserBase
-import Lexer.LexerRunner
-import Text.Megaparsec
-import Parser.Parser
 
-{- 
+import Data.List (intersperse)
+import Lexer.LexerRunner
+import Parser.Parser
+import Parser.ParserBase
+import Text.Megaparsec
+
+{-
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
   sourceString <- readFile "./test programs/simple.hs"
   runAndPrettyPrintLexer sourceString
 -}
+
+-- actually prints nextlines
+printList :: Show a => [a] -> IO ()
+printList = mapM_ (putStrLn . show)
 
 main :: IO ()
 main = do
@@ -20,11 +26,8 @@ main = do
   case maybeParsedTokens of
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
-       let sections = splitIntoSections parsedTokens
-       in print sections
+      let sections = sanitizeSections $ splitIntoSections parsedTokens
+       in -- printList sections
+          sequence_ $ intersperse (putStrLn "------------------------------------") $ map (parseTest pFunctionDefinition . tokensToParsableString sourceString) sections
 
-      --parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)
-
-
-fun :: Num a => a -> a
-fun x = x + 10
+-- parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)

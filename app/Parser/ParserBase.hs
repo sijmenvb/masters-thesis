@@ -31,18 +31,34 @@ data WithSimplePos a = WithSimplePos
     end_pos :: (Int, Int),
     value :: a
   }
-  deriving (Show)
 
-keepPos :: a1 -> WithSimplePos a2 -> WithSimplePos a1
-keepPos val (WithSimplePos start end _) = WithSimplePos start end val
+instance Show a => Show (WithSimplePos a) where
+  show (WithSimplePos (startLine, startCol) (endLine, endCol) value) =
+    show value ++ "[" ++ show startLine ++ ":" ++ show startCol ++ "-" ++ show endLine ++ ":" ++ show endCol ++ "]"
+
+keepPos :: (a2 -> a1) -> WithSimplePos a2 -> WithSimplePos a1
+keepPos fun (WithSimplePos start end val) = WithSimplePos start end $ fun val
 
 data MyStream = MyStream
   { myStreamInput :: String, -- for showing offending lines
     unMyStream :: [WithPos TokenInfo]
   }
+  deriving (Show)
 
 tokensToParsableString :: String -> [TokenInfo] -> MyStream
-tokensToParsableString source tokens = MyStream source (map liftTokenInfo tokens)
+tokensToParsableString source tokens = MyStream (tokensToString source tokens) (map liftTokenInfo tokens)
+
+-- tokensToString generated with chatgpt.
+tokensToString :: String -> [TokenInfo] -> String
+tokensToString _ [] = ""
+tokensToString str tokens = take (endIndex - startIndex + 1) . drop startIndex $ str
+  where
+    startIndex = let (line, col) = Tokens.start_pos (head tokens) in getIndex line col
+    endIndex = let (line, col) = Tokens.end_pos (last tokens) in getIndex line col
+
+    -- Convert (line, col) to a single index in the string
+    getIndex :: Int -> Int -> Int
+    getIndex line col = sum (map Prelude.length (take (line - 1) (lines str))) + (line - 1) + (col - 1)
 
 liftTokenInfo :: TokenInfo -> WithPos TokenInfo
 liftTokenInfo tok@TokenInfo {start_pos = (lineBegin, columnBegin), end_pos = (lineEnd, columnEnd), token_string = str} =
@@ -134,14 +150,16 @@ liftMyToken myToken = WithPos pos pos 0 myToken
     pos = initialPos ""
 
 pToken :: Tokens.Token -> Parser (WithSimplePos Tokens.Token)
-pToken c = do
-  (TokenInfo {token_type = tok, start_pos = start_pos, end_pos = end_pos}) <- token test (Set.singleton . Tokens . nes . liftMyToken $ liftToken c)
+pToken input_token = do
+  (TokenInfo {token_type = tok, start_pos = start_pos, end_pos = end_pos}) <-
+    token test (Set.singleton . Tokens . nes . liftMyToken $ liftToken input_token)
+      <?> prettyShow input_token -- for the error message
   return $ WithSimplePos start_pos end_pos tok
   where
     test (WithPos {tokenVal = x}) =
-      case (token_type x, token_type (liftToken c)) of
-        --we don't care for exact names when matching names.
-        (Name _,Name _) -> Just x
+      case (token_type x, token_type (liftToken input_token)) of
+        -- we don't care for exact names when matching names.
+        (Name _, Name _) -> Just x
         (tok1, tok2) ->
           if tok1 == tok2
             then Just x
@@ -149,7 +167,7 @@ pToken c = do
     nes x = x :| []
 
 pName :: Parser (WithSimplePos Tokens.Token)
-pName = pToken (Name "")
+pName = pToken (Name "") <?> "some name"
 
 pInt :: Parser (WithSimplePos Int)
 pInt = token test Set.empty <?> "integer"

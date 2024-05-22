@@ -68,6 +68,7 @@ executable masters-thesis
   other-modules:
     Parser.Parser
     Parser.ParserBase
+    Parser.Types
     Lexer.Lexer
     Lexer.LexerRunner
     Lexer.LexerUtil

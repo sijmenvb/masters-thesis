@@ -1,12 +1,11 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+{-# HLINT ignore "Use <$>" #-}
 module Parser.Parser where
 
 import Lexer.Tokens
-import Lexer.Tokens (Token (EqualsSign, FalseToken, Name, Rpar))
 import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec
-import Text.Megaparsec (many)
-import Parser.ParserBase (WithSimplePos(WithSimplePos), pInt)
 
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
 splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
@@ -22,21 +21,37 @@ splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
     splitIntoSections' acc _ [tok] = [tok : acc]
     splitIntoSections' acc _ [] = [acc]
 
+-- to remove leading enters and remove empty/whitespace only sections.
+sanitizeSections :: [[TokenInfo]] -> [[TokenInfo]]
+sanitizeSections (list@(tok1: toks): rest) = case token_type tok1 of
+    Newline -> sanitizeSections (toks :rest)
+    _ -> list : sanitizeSections rest
+sanitizeSections ([] : rest) = sanitizeSections rest
+sanitizeSections x = x
+
+nameToString :: Parser (WithSimplePos Lexer.Tokens.Token) -> Parser (WithSimplePos String)
+nameToString nametoken = do 
+  WithSimplePos start end (Name name) <- nametoken
+  return $ WithSimplePos start end name
+
+pFunctionDefinition :: Parser (WithSimplePos FunctionDefinition)
 pFunctionDefinition = do
-  WithSimplePos start _ name <- pName
-  labels <- many pName
-  pToken EqualsSign
+  WithSimplePos start _ (Name name) <- pName
+  labels <- many ( nameToString pName)
+  _ <- pToken EqualsSign
+  expr@(WithSimplePos _ end _) <- pExpr
+  return $ WithSimplePos start end $ FunctionDefinition name labels expr
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
   let pBool =
-        keepPos (Bool True) <$> pToken TrueToken
-          <|> keepPos (Bool False) <$> pToken FalseToken
-      pExprInt = Int <$> pInt
-      pParentheses = do 
+        keepPos (\_ -> Bool True) <$> pToken TrueToken
+          <|> keepPos (\_ -> Bool False) <$> pToken FalseToken
+      pExprInt = keepPos Int <$> pInt
+      pParentheses = do
         WithSimplePos start _ _ <- pToken Lpar
         expr <- pExpr
         WithSimplePos _ end _ <- pToken Rpar
         return $ WithSimplePos start end $ Parentheses expr
       pLabel = pName
-   in pParentheses <|> pBool
+   in pParentheses <|> pBool <|> pExprInt
