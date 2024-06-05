@@ -44,13 +44,12 @@ pSection =
         pWhiteSpace
         expr@(WithSimplePos _ end _) <- pExpr
         return $ WithSimplePos start end $ FunctionDefinition name labels expr
-      pFunctionType = try $ do 
-         WithSimplePos start _ (Name name) <- pName
-         _ <- pToken DoubleColon
-         typ@(WithSimplePos _ end _) <- pType
-         return $ WithSimplePos start end $ FunctionType name typ
-  in (pFunctionType <|> pFunctionDefinition) <* pWhiteSpace <*eof
-
+      pFunctionType = try $ do
+        WithSimplePos start _ (Name name) <- pName
+        _ <- pToken DoubleColon
+        typ@(WithSimplePos _ end _) <- pType
+        return $ WithSimplePos start end $ FunctionType name typ
+   in (pFunctionType <|> pFunctionDefinition) <* pWhiteSpace <* eof
 
 pType :: Parser (WithSimplePos Type)
 pType = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
@@ -69,7 +68,13 @@ pExpr =
         WithSimplePos _ end _ <- pToken Rpar
         pWhiteSpace
         return $ WithSimplePos start end $ Parentheses expr
-      pLabel = do 
+      pLabel = do
         WithSimplePos start end (Name str) <- pName
+        pWhiteSpace
         return $ WithSimplePos start end (Parser.Types.Label str)
-   in pParentheses <|> pBool <|> pExprInt <|> pLabel
+      -- used to construct Application (constructor of Expr)
+      applicationFold :: [WithSimplePos Expr] -> WithSimplePos Expr
+      applicationFold [x] = x
+      applicationFold (firstItem : rest) = foldl buildApplication firstItem rest
+      applicationFold _ = error "unreachable state, some should guarantee at least one item in the list."
+   in applicationFold <$> some (pParentheses <|> pBool <|> pExprInt <|> pLabel)

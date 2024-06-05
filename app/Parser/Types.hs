@@ -13,10 +13,13 @@ data Expr
   | Bool Bool
   | Label LabelIdentifier
 
+--used to construct a application while preserving position information
+buildApplication ::WithSimplePos Expr ->WithSimplePos Expr -> WithSimplePos Expr
+buildApplication expr1@(WithSimplePos start _ _) expr2@(WithSimplePos _ end _) = WithSimplePos start end $ Application expr1 expr2
 -- instance Show Expr generated with chatgpt.
 instance Show Expr where
   show (Parentheses expr) = "( " ++ show expr ++ " )"
-  show (Application func arg) = show func ++ " " ++ show arg
+  show (Application func arg) = "(" ++show func ++ " " ++ show arg ++ " )"
   show (Int n) = show n
   show (Bool b) = show b
   show (Label label) = label
@@ -43,7 +46,7 @@ instance Show Type where
     show (TypeVar typeVar) = typeVar
     show (TypeCon typeCon) = show typeCon
     show (TypeArrow typ1 typ2) = show typ1 ++ " -> " ++ show typ2
-    
+
 
 type TypeVar = String
 
