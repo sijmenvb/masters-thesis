@@ -46,12 +46,13 @@ data MyStream = MyStream
   deriving (Show)
 
 tokensToParsableString :: String -> [TokenInfo] -> MyStream
-tokensToParsableString source tokens = MyStream (tokensToString source tokens) (map liftTokenInfo tokens)
+tokensToParsableString source tokens = MyStream (tokensToString source tokens ) (map liftTokenInfo tokens)
 
--- tokensToString generated with chatgpt.
+
+-- tokensToString generated using chatgpt. (it did have an incorrect +1 in there....)
 tokensToString :: String -> [TokenInfo] -> String
 tokensToString _ [] = ""
-tokensToString str tokens = take (endIndex - startIndex + 1) . drop startIndex $ str
+tokensToString str tokens = take (endIndex - startIndex) . drop startIndex $ str
   where
     startIndex = let (line, col) = Tokens.start_pos (head tokens) in getIndex line col
     endIndex = let (line, col) = Tokens.end_pos (last tokens) in getIndex line col
@@ -165,6 +166,19 @@ pToken input_token = do
             then Just x
             else Nothing
     nes x = x :| []
+
+pString :: String -> Parser (WithSimplePos String)
+pString string = token test Set.empty <?> string
+  where
+    test (WithPos _ _ _ TokenInfo {token_string = str, start_pos = start_pos, end_pos = end_pos}) =
+      if unpack str == string
+        then Just $ WithSimplePos start_pos end_pos string
+        else Nothing
+
+pWhiteSpace :: Parser ()
+pWhiteSpace = do
+  _ <- many $ pToken Newline <|> pToken Indent <|> pToken Dedent <|> pToken NewlineAfterComment
+  return ()
 
 pName :: Parser (WithSimplePos Tokens.Token)
 pName = pToken (Name "") <?> "some name"

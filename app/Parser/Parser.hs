@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 {-# HLINT ignore "Use <$>" #-}
 module Parser.Parser where
 
@@ -23,24 +24,36 @@ splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
 
 -- to remove leading enters and remove empty/whitespace only sections.
 sanitizeSections :: [[TokenInfo]] -> [[TokenInfo]]
-sanitizeSections (list@(tok1: toks): rest) = case token_type tok1 of
-    Newline -> sanitizeSections (toks :rest)
-    _ -> list : sanitizeSections rest
+sanitizeSections (list@(tok1 : toks) : rest) = case token_type tok1 of
+  Newline -> sanitizeSections (toks : rest)
+  _ -> list : sanitizeSections rest
 sanitizeSections ([] : rest) = sanitizeSections rest
 sanitizeSections x = x
 
 nameToString :: Parser (WithSimplePos Lexer.Tokens.Token) -> Parser (WithSimplePos String)
-nameToString nametoken = do 
+nameToString nametoken = do
   WithSimplePos start end (Name name) <- nametoken
   return $ WithSimplePos start end name
 
-pFunctionDefinition :: Parser (WithSimplePos FunctionDefinition)
-pFunctionDefinition = do
-  WithSimplePos start _ (Name name) <- pName
-  labels <- many ( nameToString pName)
-  _ <- pToken EqualsSign
-  expr@(WithSimplePos _ end _) <- pExpr
-  return $ WithSimplePos start end $ FunctionDefinition name labels expr
+pSection :: Parser (WithSimplePos Section)
+pSection =
+  let pFunctionDefinition = do
+        WithSimplePos start _ (Name name) <- pName
+        labels <- many (nameToString pName)
+        _ <- pToken EqualsSign
+        pWhiteSpace
+        expr@(WithSimplePos _ end _) <- pExpr
+        return $ WithSimplePos start end $ FunctionDefinition name labels expr
+      pFunctionType = try $ do 
+         WithSimplePos start _ (Name name) <- pName
+         _ <- pToken DoubleColon
+         typ@(WithSimplePos _ end _) <- pType
+         return $ WithSimplePos start end $ FunctionType name typ
+  in (pFunctionType <|> pFunctionDefinition) <* pWhiteSpace <*eof
+
+
+pType :: Parser (WithSimplePos Type)
+pType = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
@@ -50,8 +63,13 @@ pExpr =
       pExprInt = keepPos Int <$> pInt
       pParentheses = do
         WithSimplePos start _ _ <- pToken Lpar
+        pWhiteSpace
         expr <- pExpr
+        pWhiteSpace
         WithSimplePos _ end _ <- pToken Rpar
+        pWhiteSpace
         return $ WithSimplePos start end $ Parentheses expr
-      pLabel = pName
-   in pParentheses <|> pBool <|> pExprInt
+      pLabel = do 
+        WithSimplePos start end (Name str) <- pName
+        return $ WithSimplePos start end (Parser.Types.Label str)
+   in pParentheses <|> pBool <|> pExprInt <|> pLabel

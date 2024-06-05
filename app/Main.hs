@@ -27,7 +27,7 @@ main = do
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
       let sections = sanitizeSections $ splitIntoSections parsedTokens
-       in -- printList sections
-          sequence_ $ intersperse (putStrLn "------------------------------------") $ map (parseTest pFunctionDefinition . tokensToParsableString sourceString) sections
+       in --mapM_ (print . tokensToString sourceString ) sections
+          sequence_ $ map (print) sections ++ intersperse (putStrLn "------------------------------------") (map (parseTest pSection . tokensToParsableString sourceString) sections) 
 
 -- parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)
