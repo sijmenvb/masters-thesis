@@ -1,10 +1,13 @@
 module Parser.Types where
+import Parser.ParserBase 
 
-import Parser.ParserBase
+
 
 type FunctionName = String
 
 type LabelIdentifier = String
+
+type Pattern = String
 
 data Expr
   = Parentheses (WithSimplePos Expr)
@@ -12,6 +15,8 @@ data Expr
   | Int Int
   | Bool Bool
   | Label LabelIdentifier
+  | LambdaAbstraction LabelIdentifier (WithSimplePos Expr)
+  | LetExpression Pattern (WithSimplePos Expr) (WithSimplePos Expr)
 
 --used to construct a application while preserving position information
 buildApplication ::WithSimplePos Expr ->WithSimplePos Expr -> WithSimplePos Expr
@@ -23,6 +28,8 @@ instance Show Expr where
   show (Int n) = show n
   show (Bool b) = show b
   show (Label label) = label
+  show (LambdaAbstraction name expr) = "\\" ++  name ++ " -> " ++ show expr
+  show (LetExpression pattern expr1 expr2) = "let " ++  pattern ++ " = " ++ show expr1 ++ " in " ++ show expr2
 
 -- used to store function definitions that look like:
 -- FunctionName [LabelIdentifier] = (WithSimplePos Expr)

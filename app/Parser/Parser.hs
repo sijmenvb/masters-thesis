@@ -43,11 +43,13 @@ pSection =
         _ <- pToken EqualsSign
         pWhiteSpace
         expr@(WithSimplePos _ end _) <- pExpr
+        pWhiteSpace
         return $ WithSimplePos start end $ FunctionDefinition name labels expr
       pFunctionType = try $ do
         WithSimplePos start _ (Name name) <- pName
         _ <- pToken DoubleColon
         typ@(WithSimplePos _ end _) <- pType
+        pWhiteSpace
         return $ WithSimplePos start end $ FunctionType name typ
    in (pFunctionType <|> pFunctionDefinition) <* pWhiteSpace <* eof
 
@@ -72,9 +74,33 @@ pExpr =
         WithSimplePos start end (Name str) <- pName
         pWhiteSpace
         return $ WithSimplePos start end (Parser.Types.Label str)
+      pLambda = do 
+        WithSimplePos start _ _ <- pToken Lambda
+        pWhiteSpace
+        WithSimplePos _ _ (Name labelName) <- pName
+        pWhiteSpace
+        _ <- pToken RArrow
+        pWhiteSpace
+        expr@(WithSimplePos _ end _) <- pExpr
+        pWhiteSpace
+        return $ WithSimplePos start end $ LambdaAbstraction labelName expr
+      pLetExpr = do
+        WithSimplePos start _ _ <- pToken Let
+        pWhiteSpace
+        WithSimplePos _ _ (Name labelName) <- pName
+        pWhiteSpace
+        _ <- pToken EqualsSign
+        pWhiteSpace
+        expr1@(WithSimplePos _ end _) <- pExpr
+        pWhiteSpace
+        _ <- pToken In
+        pWhiteSpace
+        expr2@(WithSimplePos _ end _) <- pExpr
+        pWhiteSpace
+        return $ WithSimplePos start end $ LetExpression labelName expr1 expr2
       -- used to construct Application (constructor of Expr)
       applicationFold :: [WithSimplePos Expr] -> WithSimplePos Expr
       applicationFold [x] = x
       applicationFold (firstItem : rest) = foldl buildApplication firstItem rest
       applicationFold _ = error "unreachable state, some should guarantee at least one item in the list."
-   in applicationFold <$> some (pParentheses <|> pBool <|> pExprInt <|> pLabel)
+   in applicationFold <$> some (pParentheses <|> pBool <|> pExprInt <|> pLabel <|> pLambda <|> pLetExpr)

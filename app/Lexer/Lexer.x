@@ -34,7 +34,6 @@ tokens :-
       "True" { action TrueToken }
       "False" { action FalseToken }
       @number {numberAction}
-      @identifier {stringAction Name}
       \n$white_no_nl* {startWhite}
        $white_no_nl+ ;   -- ignote this since we only care up significant white spaces (leading white spaces)
       "("   { action Lpar }
@@ -50,6 +49,11 @@ tokens :-
       "*"   { action Star }
       "::"  { action DoubleColon }
       "="   { action EqualsSign }
+      "\"   { action Lambda } -- this is actually a quote although syntax highlighting may disagree " 
+      "λ"   { action Lambda }
+      "let" { action Let }
+      "in"  { action In }
+      @identifier {stringAction Name}
       @commentline  { commentAction }
       "{-"  { multiLineCommentAction }
       
