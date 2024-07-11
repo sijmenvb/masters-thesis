@@ -91,7 +91,7 @@ pExpr =
         pWhiteSpace
         _ <- pToken EqualsSign
         pWhiteSpace
-        expr1@(WithSimplePos _ end _) <- pExpr
+        expr1 <- pExpr
         pWhiteSpace
         _ <- pToken In
         pWhiteSpace

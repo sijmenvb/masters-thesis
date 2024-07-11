@@ -1,4 +1,5 @@
-fun1 x = (True) case
+fun1 x = (True)
+
 val :: Int
 val =
   42
