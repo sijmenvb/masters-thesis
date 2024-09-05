@@ -9,7 +9,7 @@ import Parser.Types
 import Text.Megaparsec
 
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
-splitIntoSections list = map reverse $ splitIntoSections' [] 0 list
+splitIntoSections listIn = map reverse $ splitIntoSections' [] 0 listIn
   where
     splitIntoSections' :: [TokenInfo] -> Int -> [TokenInfo] -> [[TokenInfo]]
     splitIntoSections' acc depth (tok1 : tok2 : list) = case (token_type tok1, token_type tok2, depth) of

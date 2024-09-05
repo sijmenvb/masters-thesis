@@ -73,6 +73,7 @@ executable masters-thesis
     Lexer.LexerRunner
     Lexer.LexerUtil
     Lexer.Tokens
+    TypeInference.TypeInference
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -81,6 +82,7 @@ executable masters-thesis
   build-depends:
     , array        >=0.5.4.0
     , base         ^>=4.16.4.0
+    , mtl
     , containers
     , megaparsec
     , rio          >=0.1.12.0
