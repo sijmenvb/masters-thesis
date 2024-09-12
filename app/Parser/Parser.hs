@@ -8,6 +8,14 @@ import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec
 
+rightAssociative :: (WithSimplePos a -> WithSimplePos a -> WithSimplePos a) -> WithSimplePos a -> [WithSimplePos a] -> WithSimplePos a 
+rightAssociative constructor first (x1:x2:xs) = constructor first (rightAssociative constructor x1 (x2:xs))
+rightAssociative constructor first [x1] = constructor first x1
+rightAssociative _ first [] = first
+
+liftFunToWithSimplePosFun :: (a -> a -> a) -> (WithSimplePos a -> WithSimplePos a -> WithSimplePos a)
+liftFunToWithSimplePosFun constructor ( WithSimplePos start _ x1)  (WithSimplePos _ end x2) = WithSimplePos start end (constructor x1 x2)
+
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
 splitIntoSections listIn = map reverse $ splitIntoSections' [] 0 listIn
   where
@@ -54,7 +62,24 @@ pSection =
    in (pFunctionType <|> pFunctionDefinition) <* pWhiteSpace <* eof
 
 pType :: Parser (WithSimplePos Type)
-pType = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
+pType = do
+  firstType <- pSimpleType
+  rest <-
+    many
+      ( do
+          _ <- pToken RArrow
+          pWhiteSpace
+          pSimpleType
+      )
+  return $ rightAssociative (liftFunToWithSimplePosFun TypeArrow) firstType rest
+
+pSimpleType :: Parser (WithSimplePos Type)
+pSimpleType =
+  let pTypeInt = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
+      pTypeBool = keepPos (\_ -> TypeCon TypeBool) <$> pString "Bool"
+      pTypeList = keepPos (\_ -> TypeCon TypeList) <$> pString "List"
+      pTypePair = keepPos (\_ -> TypeCon TypePair) <$> pString "Pair"
+   in pTypeInt <|> pTypeBool <|> pTypeList <|> pTypePair
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
@@ -74,7 +99,7 @@ pExpr =
         WithSimplePos start end (Name str) <- pName
         pWhiteSpace
         return $ WithSimplePos start end (Parser.Types.Label str)
-      pLambda = do 
+      pLambda = do
         WithSimplePos start _ _ <- pToken Lambda
         pWhiteSpace
         WithSimplePos _ _ (Name labelName) <- pName

@@ -4,6 +4,7 @@
 {-# HLINT ignore "Avoid lambda" #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# HLINT ignore "Use tuple-section" #-}
+{-# HLINT ignore "Use lambda-case" #-}
 module TypeInference.TypeInference where
 
 import qualified Data.Map as Map
@@ -32,9 +33,23 @@ instance Monad MaybeError where
   (Error msg) >>= _ = Error msg
   (Justt x) >>= f = f x
 
+-- | This Show instance was auto-generated with the help of ChatGPT
+instance Show a => Show (MaybeError a) where
+  show (Justt x) = "Just " ++ show x
+  show (Error err) = "Error: " ++ err
+
 type TypeEnvironment = Map.Map LabelIdentifier Type
 
 type Substitution = Map.Map Type Type
+
+freeExpressionVariables :: WithSimplePos Expr -> Set.Set LabelIdentifier
+freeExpressionVariables (WithSimplePos _ _ (Parentheses expression)) = freeExpressionVariables expression
+freeExpressionVariables (WithSimplePos _ _ (Int _)) = Set.empty
+freeExpressionVariables (WithSimplePos _ _ (Bool _)) = Set.empty
+freeExpressionVariables (WithSimplePos _ _ (Label identifier)) = Set.singleton identifier
+freeExpressionVariables (WithSimplePos _ _ (Application expression1 expression2)) = Set.union (freeExpressionVariables expression1) (freeExpressionVariables expression2)
+freeExpressionVariables (WithSimplePos _ _ (LambdaAbstraction identifier lambdaExpr)) = Set.delete identifier (freeExpressionVariables lambdaExpr)
+freeExpressionVariables (WithSimplePos _ _ (LetExpression patttern expression1 expression2)) = Set.union (freeExpressionVariables expression1) (Set.delete patttern (freeExpressionVariables expression2))
 
 freeTypeVariables :: Type -> Set.Set Type
 freeTypeVariables typ@(TypeVar _) = Set.singleton typ
@@ -44,10 +59,13 @@ freeTypeVariables (TypeArrow typ1 typ2) = Set.union (freeTypeVariables typ1) (fr
 
 mostGeneralUnifier :: Type -> Type -> Maybe Substitution
 mostGeneralUnifier (TypeVar name1) (TypeVar name2) | name1 == name2 = Just Map.empty
+mostGeneralUnifier (FreshVar iden1) (FreshVar iden2) | iden1 == iden2 = Just Map.empty
 mostGeneralUnifier (TypeCon con1) (TypeCon con2) | con1 == con2 = Just Map.empty
 mostGeneralUnifier typ1@(TypeVar _) typ2 | Set.notMember typ1 (freeTypeVariables typ2) = Just $ Map.singleton typ1 typ2
+mostGeneralUnifier typ1@(FreshVar _) typ2 | Set.notMember typ1 (freeTypeVariables typ2) = Just $ Map.singleton typ1 typ2
 mostGeneralUnifier typ1 typ2@(TypeVar _) | Set.notMember typ2 (freeTypeVariables typ1) = Just $ Map.singleton typ2 typ1
-mostGeneralUnifier typ1 typ2@(TypeVar _) = Just $ Map.singleton typ2 typ1
+mostGeneralUnifier typ1 typ2@(FreshVar _) | Set.notMember typ2 (freeTypeVariables typ1) = Just $ Map.singleton typ2 typ1
+-- mostGeneralUnifier typ1 typ2@(TypeVar _) = Just $ Map.singleton typ2 typ1 -- TODO:verify that this may be removed
 mostGeneralUnifier (TypeArrow typ1a typ1b) (TypeArrow typ2a typ2b) =
   do
     substitution1 <- mostGeneralUnifier typ1a typ2a
@@ -75,6 +93,9 @@ applySubstitutionToTypeEnvironment substitution typeEnv = Map.map (applySubstitu
 type InferenceState = Int
 
 newtype Inference a = Inference {runState :: InferenceState -> (MaybeError a, InferenceState)}
+
+runInference :: InferenceState -> Inference a -> (MaybeError a, InferenceState)
+runInference state (Inference run) = run state
 
 instance Functor Inference where
   fmap :: (a -> b) -> Inference a -> Inference b
@@ -109,7 +130,7 @@ put state = Inference (const (Justt (), state))
 
 infixl 3 <?>
 
---used to overwrite the error message with something more specific in case of an error.
+-- used to overwrite the error message with something more specific in case of an error.
 (<?>) :: Inference a -> String -> Inference a
 (Inference runState1) <?> msg =
   Inference
@@ -118,12 +139,12 @@ infixl 3 <?>
         (Error _, newState) -> (Error msg, newState)
     )
 
---helper function to make working with maybe computations in do notation easier
+-- helper function to make working with maybe computations in do notation easier
 liftError :: Maybe a -> Inference a
 liftError (Just x) = pure x
 liftError Nothing = Inference (\state -> (Error "", state))
 
---get a fresh variable
+-- get a fresh variable
 freshVar :: Inference Type
 freshVar = do
   counter <- get
@@ -139,7 +160,7 @@ generateFreshVars n = do
   return (var : vars)
 
 generalise :: TypeEnvironment -> Type -> Type
-generalise typeEnv typ = typ -- TODO: implement this properly!!!!!!!!!
+generalise typeEnv typ = typ -- TODO: implement this properly!!!!!!!!! (supposedly this should replace fresh variables with generalised variables)
 
 -- W type inference algorithm
 typeInference :: TypeEnvironment -> WithSimplePos Expr -> Inference (Substitution, Type)
@@ -150,8 +171,14 @@ typeInference typeEnv expr@(WithSimplePos start end (Label identifier)) =
   do
     foundType <-
       liftError (Map.lookup identifier typeEnv)
-        <?> "Unification ERROR could not find " ++ show expr ++ " in current context at" ++ show start ++ ":" ++ show end -- TODO: proper error message that repeats offending code etc.
-    let freeVars = freeTypeVariables foundType
+        <?> "Unification ERROR could not find " ++ show expr ++ " in current context at " ++ show start ++ ":" ++ show end -- TODO: proper error message that repeats offending code etc.
+    let freeVars =
+          Set.filter -- filter out fresh variables as they don't need to be replaced
+            ( \x -> case x of
+                (TypeVar _) -> True
+                _ -> False
+            )
+            $ freeTypeVariables foundType
     freshVars <- generateFreshVars (Set.size freeVars)
     let substitution = Map.fromList $ zip (Set.toList freeVars) freshVars
     return (Map.empty, applySubstitution substitution foundType)
@@ -161,14 +188,14 @@ typeInference typeEnv (WithSimplePos _ _ (LambdaAbstraction identifier lambdaExp
   return (substitution, applySubstitution substitution (TypeArrow fresh foundType))
 typeInference typeEnv (WithSimplePos _ _ (Application expression1@(WithSimplePos start1 end1 _) expression2@(WithSimplePos start2 end2 _))) = do
   (substitution1, foundType1) <- typeInference typeEnv expression1
-  (substitution2, foundType2) <- typeInference (applySubstitutionToTypeEnvironment substitution1 typeEnv) expression1
+  (substitution2, foundType2) <- typeInference (applySubstitutionToTypeEnvironment substitution1 typeEnv) expression2
   fresh <- freshVar
   substitution3 <-
     liftError (mostGeneralUnifier (applySubstitution substitution2 foundType1) (TypeArrow foundType2 fresh))
-      <?> "Unification ERROR could not unify" ++ show foundType1 ++ " and " ++ show foundType2 ++ "at" ++ show start1 ++ ":" ++ show end1 ++ " and " ++ show start2 ++ ":" ++ show end2 ++ "respectively" -- TODO: proper error message that repeats offending code etc.
+      <?> "Unification ERROR could not unify " ++ show foundType1 ++ " and  " ++ show (TypeArrow foundType2 fresh) ++ " at " ++ show start1 ++ ":" ++ show end1 ++ " and " ++ show start2 ++ ":" ++ show end2 ++ " respectively." -- TODO: proper error message that repeats offending code etc.
   return (composeSubstitution substitution3 (composeSubstitution substitution2 substitution1), applySubstitution substitution3 fresh)
-typeInference typeEnv (WithSimplePos _ _ (LetExpression pattern expression1 expression2)) = do
+typeInference typeEnv (WithSimplePos _ _ (LetExpression patttern expression1 expression2)) = do
   (substitution1, foundType1) <- typeInference typeEnv expression1
   let sigma = generalise (applySubstitutionToTypeEnvironment substitution1 typeEnv) foundType1
-  (substitution2, foundType2) <- typeInference (Map.insert pattern sigma (Map.delete pattern (applySubstitutionToTypeEnvironment substitution1 typeEnv))) expression2
+  (substitution2, foundType2) <- typeInference (Map.insert patttern sigma (Map.delete patttern (applySubstitutionToTypeEnvironment substitution1 typeEnv))) expression2
   return (composeSubstitution substitution2 substitution1, foundType2)

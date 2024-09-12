@@ -29,7 +29,7 @@ instance Show Expr where
   show (Bool b) = show b
   show (Label label) = label
   show (LambdaAbstraction name expr) = "\\" ++  name ++ " -> " ++ show expr
-  show (LetExpression pattern expr1 expr2) = "let " ++ show pattern ++ " = " ++ show expr1 ++ " in " ++ show expr2
+  show (LetExpression patttern expr1 expr2) = "let " ++ show patttern ++ " = " ++ show expr1 ++ " in " ++ show expr2
 
 -- used to store function definitions that look like:
 -- FunctionName [LabelIdentifier] = (WithSimplePos Expr)
@@ -56,7 +56,7 @@ instance Show Type where
     show (TypeVar typeVar) = typeVar
     show (FreshVar num) = "v" ++ show num
     show (TypeCon typeCon) = show typeCon
-    show (TypeArrow typ1 typ2) = show typ1 ++ " -> " ++ show typ2
+    show (TypeArrow typ1 typ2) = "(" ++ show typ1 ++ " -> " ++ show typ2 ++ ")"
 
 
 type TypeVar = String
@@ -64,7 +64,6 @@ type TypeVar = String
 data TypeCon
   = TypeInt
   | TypeBool
-  | TypeFun
   | TypeList
   | TypePair
   deriving (Eq, Ord)
@@ -72,6 +71,5 @@ data TypeCon
 instance Show TypeCon where
   show TypeInt = "Int"
   show TypeBool = "Bool"
-  show TypeFun = "func"
   show TypeList = "List"
   show TypePair = "Pair"

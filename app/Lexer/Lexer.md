@@ -139,6 +139,4 @@ gives us
 7,13 - 7,17:         Name               "fun1"    
 7,18 - 7,21:         Name               "val"     
 7,21 - 8,0:          Newline            "\n"      
-8,0 - 9,0:           Newline            "\n"      
-9,0 - 10,0:          Newline            "\n"
 ```
