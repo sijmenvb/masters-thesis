@@ -57,9 +57,17 @@ sortSectionsOnDependencies sections =
 
 inferTypeEnvironment :: TypeEnvironment -> [Section] -> (TypeEnvironment, [Problem])
 inferTypeEnvironment typeEnv sections =
-  let orderedSections = List.map fst $ sortSectionsOnDependencies sections
+  let orderedSections :: [Section]
+      orderedSections = List.map fst $ sortSectionsOnDependencies sections
+
       processSection :: TypeEnvironment -> Section -> Inference TypeEnvironment
-      processSection typeEnvIn (FunctionType name (WithSimplePos _ _ typeIn)) = pure (Map.insert name typeIn typeEnvIn)
+      processSection typeEnvIn (FunctionType name (WithSimplePos _ _ typeIn)) =
+        recover
+          name
+          typeEnvIn
+          $ if Map.member name typeEnvIn
+            then fail $ name ++ " has multiple type annotations!"
+            else pure (Map.insert name typeIn typeEnvIn)
       processSection typeEnvIn (FunctionDefinition name functionArguments expr) =
         case Map.lookup name typeEnvIn of
           Just foundType -> do
@@ -79,7 +87,7 @@ inferTypeEnvironment typeEnv sections =
                       Nothing -> fail $ "the inferred type of " ++ name ++ " is " ++ show inferredType ++ " but the type annotation says it should be " ++ show foundType ++ " these do not match!" -- TODO: add the conflicting types.
                 )
             putState state
-            pure typeEnvIn -- there was a user given type definition TODO: maybe do type checking here
+            pure typeEnvIn
           Nothing ->
             recover
               name
@@ -95,4 +103,4 @@ inferTypeEnvironment typeEnv sections =
       (maybeEnv, problems) = runInference 0 $ Monad.foldM processSection typeEnv orderedSections
    in case maybeEnv of
         Justt finalTypeEnv -> (finalTypeEnv, problems)
-        Error str -> (typeEnv, Problem "ERROR!!!!" str : problems)
+        Error str -> (typeEnv, Problem "ERROR!!!!" str : problems) -- if this happens you probably forgot a recover somewhere.
