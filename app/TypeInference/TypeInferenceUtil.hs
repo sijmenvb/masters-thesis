@@ -19,8 +19,8 @@ getDependencies (FunctionType _ _) = Set.empty
 -- TODO: handle infinite loops!
 gatherDepths :: [Section] -> Map.Map FunctionName Int
 gatherDepths sections =
-  let calculateDebth :: Section -> Int
-      calculateDebth section =
+  let calculateDepth :: Section -> Int
+      calculateDepth section =
         Set.foldl
           ( \acc dependency -> max acc $ case Map.lookup dependency result of
               Just depth -> depth
@@ -33,7 +33,7 @@ gatherDepths sections =
       result =
         List.foldl
           ( \map section -> case section of
-              (FunctionDefinition name _ _) -> Map.insert name (calculateDebth section) map
+              (FunctionDefinition name _ _) -> Map.insert name (calculateDepth section) map
               (FunctionType _ _) -> map
           )
           Map.empty
@@ -55,28 +55,44 @@ sortSectionsOnDependencies sections =
           )
           sections
 
-inferTypeEnvironment :: TypeEnvironment -> [Section] -> MaybeError ([String], TypeEnvironment)
+inferTypeEnvironment :: TypeEnvironment -> [Section] -> (TypeEnvironment, [Problem])
 inferTypeEnvironment typeEnv sections =
   let orderedSections = List.map fst $ sortSectionsOnDependencies sections
-      processSection :: ([String], TypeEnvironment) -> Section -> Inference ([String], TypeEnvironment)
-      processSection (errors, typeEnvIn) (FunctionType name (WithSimplePos _ _ typeIn)) = pure (errors, Map.insert name typeIn typeEnvIn)
-      processSection (errors, typeEnvIn) (FunctionDefinition name functionArguments expr) =
-        if Map.member name typeEnvIn
-          then pure ([], typeEnvIn) -- there was a user given type definition TODO: maybe do type checking here
-          else
-            let x =
-                  runInference
-                    0
-                    ( do
-                        freshVars <- generateFreshVars (List.length functionArguments)
-                        let inputTypes = zip (List.map (\(WithSimplePos _ _ x) -> x) functionArguments) freshVars
-                        (substitution, inferredReturnType) <- typeInference (Map.union (Map.fromList inputTypes) typeEnvIn) expr
-                        let inferredType = applySubstitution substitution (List.foldr (\(_, typ) val -> TypeArrow typ val) inferredReturnType inputTypes)
-                        return $ Map.insert name inferredType typeEnvIn
-                    )
-             in case x of
-                  (Justt typeEnvOut, newState) -> do
-                    put newState
-                    pure (errors, typeEnvOut)
-                  (Error str, _) -> pure (errors ++ [str], typeEnvIn)
-   in fst $ runInference 0 $ Monad.foldM processSection ([], typeEnv) orderedSections
+      processSection :: TypeEnvironment -> Section -> Inference TypeEnvironment
+      processSection typeEnvIn (FunctionType name (WithSimplePos _ _ typeIn)) = pure (Map.insert name typeIn typeEnvIn)
+      processSection typeEnvIn (FunctionDefinition name functionArguments expr) =
+        case Map.lookup name typeEnvIn of
+          Just foundType -> do
+            state <- getState
+            _ <-
+              recover
+                name
+                typeEnvIn
+                ( do
+                    freshVars <- generateFreshVars (List.length functionArguments)
+                    let inputTypes = zip (List.map (\(WithSimplePos _ _ x) -> x) functionArguments) freshVars
+                    (substitution, inferredReturnType) <- typeInference (Map.union (Map.fromList inputTypes) typeEnvIn) expr
+                    let inferredType = applySubstitution substitution (List.foldr (\(_, typ) val -> TypeArrow typ val) inferredReturnType inputTypes)
+                    let mgu = mostGeneralUnifier inferredType foundType -- TODO: check if the order of the arguments is correct here
+                    case mgu of
+                      Just _ -> return typeEnvIn
+                      Nothing -> fail $ "the inferred type of " ++ name ++ " is " ++ show inferredType ++ " but the type annotation says it should be " ++ show foundType ++ " these do not match!" -- TODO: add the conflicting types.
+                )
+            putState state
+            pure typeEnvIn -- there was a user given type definition TODO: maybe do type checking here
+          Nothing ->
+            recover
+              name
+              typeEnvIn
+              ( do
+                  freshVars <- generateFreshVars (List.length functionArguments)
+                  let inputTypes = zip (List.map (\(WithSimplePos _ _ x) -> x) functionArguments) freshVars
+                  (substitution, inferredReturnType) <- typeInference (Map.union (Map.fromList inputTypes) typeEnvIn) expr
+                  let inferredType = applySubstitution substitution (List.foldr (\(_, typ) val -> TypeArrow typ val) inferredReturnType inputTypes)
+                  return $ Map.insert name inferredType typeEnvIn
+              )
+
+      (maybeEnv, problems) = runInference 0 $ Monad.foldM processSection typeEnv orderedSections
+   in case maybeEnv of
+        Justt finalTypeEnv -> (finalTypeEnv, problems)
+        Error str -> (typeEnv, Problem "ERROR!!!!" str : problems)

@@ -37,11 +37,17 @@ main = do
       let sections = sanitizeSections $ splitIntoSections parsedTokens
           parsedMaybeSections = List.map (parse pSection sourceString . tokensToParsableString sourceString) sections
           (parsedErrors, parsedSections) = partitionEithers parsedMaybeSections
-          inferedTypes = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
-       in -- mapM_ (print . tokensToString sourceString ) sections
+          (inferredTypes, problems) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
+       in
           sequence_ $
-            (map (print) sections ++ intersperse (putStrLn "------------------------------------") (map (parseTest pSection . tokensToParsableString sourceString) sections))
-              ++ [putStrLn "\n\n-----------------Types:------------------",
-              print inferedTypes]
-
--- parseTest (pSum <* eof) (tokensToParsableString sourceString parsedTokens)
+            [putStrLn "-----------------tokens:------------------"]
+              ++ map print sections
+              ++ [putStrLn "\n\n-----------------expressions:------------------"]
+              ++ intersperse (putStrLn "------------------------------------") (map print parsedSections)
+              ++ [putStrLn "\n-----------------expression errors:------------------"]
+              ++ intersperse (putStrLn "------------------------------------") (map (putStrLn . errorBundlePretty) parsedErrors)
+              ++ [putStrLn "\n\n-----------------Types:------------------"]
+              ++ map print (Map.toList inferredTypes)
+              ++ [putStrLn "\n-----------------Type errors:------------------"]
+              ++ map print problems
+               ++ [putStrLn "\n\n"]

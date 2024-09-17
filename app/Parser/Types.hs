@@ -73,3 +73,6 @@ instance Show TypeCon where
   show TypeBool = "Bool"
   show TypeList = "List"
   show TypePair = "Pair"
+
+data Problem = Problem FunctionName String
+  deriving (Show)

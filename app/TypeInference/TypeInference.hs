@@ -92,10 +92,10 @@ applySubstitutionToTypeEnvironment substitution typeEnv = Map.map (applySubstitu
 
 type InferenceState = Int
 
-newtype Inference a = Inference {runState :: InferenceState -> (MaybeError a, InferenceState)}
+newtype Inference a = Inference {runState :: InferenceState -> (MaybeError a, [Problem], InferenceState)}
 
-runInference :: InferenceState -> Inference a -> (MaybeError a, InferenceState)
-runInference state (Inference run) = run state
+runInference :: InferenceState -> Inference a -> (MaybeError a, [Problem])
+runInference state (Inference run) = let (maybeError,problems,_) = run state in (maybeError,problems)
 
 instance Functor Inference where
   fmap :: (a -> b) -> Inference a -> Inference b
@@ -103,7 +103,7 @@ instance Functor Inference where
 
 instance Applicative Inference where
   pure :: a -> Inference a
-  pure x = Inference (\state -> (Justt x, state))
+  pure x = Inference (\state -> (Justt x, [], state))
   (<*>) :: Inference (a -> b) -> Inference a -> Inference b
   f_w <*> x_w = f_w >>= (\f -> x_w >>= (\x -> pure (f x)))
 
@@ -114,19 +114,36 @@ instance Monad Inference where
   (Inference runState1) >>= f =
     Inference
       ( \state ->
-          let (maybeVal, newState) = runState1 state
+          let (maybeVal, problems, newState) = runState1 state
            in case maybeVal of
-                Error str -> (Error str, newState)
+                Error str -> (Error str, problems, newState)
                 Justt value ->
                   let Inference runState2 = f value
-                   in runState2 newState
+                      (maybeVal2, problems2, newState2) = runState2 newState
+                   in (maybeVal2, problems2 ++ problems, newState2)
       )
 
-get :: Inference InferenceState
-get = Inference (\state -> (Justt state, state))
+instance MonadFail Inference where
+  fail :: String -> Inference a
+  fail str = Inference (\state -> (Error str, [], state))
 
-put :: InferenceState -> Inference ()
-put state = Inference (const (Justt (), state))
+getState :: Inference InferenceState
+getState = Inference (\state -> (Justt state, [], state))
+
+putState :: InferenceState -> Inference ()
+putState state = Inference (const (Justt (), [], state))
+
+--takes the current FunctionName and a recover value
+--will try to do the inference given, iff it fails it will add the error to the list of problems and return the recoverVal instead reverting to the state before this section was attempted.
+recover :: FunctionName -> a -> Inference a -> Inference a
+recover functionName recoverVal (Inference run)  =
+  Inference
+    ( \state ->
+        let (maybeVal, problems, newState) = run state
+         in case maybeVal of
+            Justt _ -> (maybeVal, problems, newState)
+            Error str -> (Justt recoverVal, Problem functionName str:problems, state)
+    )
 
 infixl 3 <?>
 
@@ -135,20 +152,20 @@ infixl 3 <?>
 (Inference runState1) <?> msg =
   Inference
     ( \state -> case runState1 state of
-        result@(Justt _, _) -> result
-        (Error _, newState) -> (Error msg, newState)
+        result@(Justt _, _, _) -> result
+        (Error _, _, newState) -> (Error msg, [], newState)
     )
 
 -- helper function to make working with maybe computations in do notation easier
 liftError :: Maybe a -> Inference a
 liftError (Just x) = pure x
-liftError Nothing = Inference (\state -> (Error "", state))
+liftError Nothing = Inference (\state -> (Error "", [], state))
 
 -- get a fresh variable
 freshVar :: Inference Type
 freshVar = do
-  counter <- get
-  put (counter + 1)
+  counter <- getState
+  putState (counter + 1)
   return $ FreshVar counter
 
 -- to generate multiple fresh variables.
