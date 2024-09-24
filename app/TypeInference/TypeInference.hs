@@ -38,6 +38,13 @@ instance Show a => Show (MaybeError a) where
   show (Justt x) = "Just " ++ show x
   show (Error err) = "Error: " ++ err
 
+instance FailMessage MaybeError where
+  (<?>) :: MaybeError a -> String -> MaybeError a
+  maybeErr <?> msg =
+    case maybeErr of
+      result@(Justt _) -> result
+      (Error _) -> Error msg
+
 type TypeEnvironment = Map.Map LabelIdentifier Type
 
 type Substitution = Map.Map Type Type
@@ -95,7 +102,7 @@ type InferenceState = Int
 newtype Inference a = Inference {runState :: InferenceState -> (MaybeError a, [Problem], InferenceState)}
 
 runInference :: InferenceState -> Inference a -> (MaybeError a, [Problem])
-runInference state (Inference run) = let (maybeError,problems,_) = run state in (maybeError,problems)
+runInference state (Inference run) = let (maybeError, problems, _) = run state in (maybeError, problems)
 
 instance Functor Inference where
   fmap :: (a -> b) -> Inference a -> Inference b
@@ -133,28 +140,32 @@ getState = Inference (\state -> (Justt state, [], state))
 putState :: InferenceState -> Inference ()
 putState state = Inference (const (Justt (), [], state))
 
---takes the current FunctionName and a recover value
---will try to do the inference given, iff it fails it will add the error to the list of problems and return the recoverVal instead reverting to the state before this section was attempted.
+-- takes the current FunctionName and a recover value
+-- will try to do the inference given, iff it fails it will add the error to the list of problems and return the recoverVal instead reverting to the state before this section was attempted.
 recover :: FunctionName -> a -> Inference a -> Inference a
-recover functionName recoverVal (Inference run)  =
+recover functionName recoverVal (Inference run) =
   Inference
     ( \state ->
         let (maybeVal, problems, newState) = run state
          in case maybeVal of
-            Justt _ -> (maybeVal, problems, newState)
-            Error str -> (Justt recoverVal, Problem functionName str:problems, state)
+              Justt _ -> (maybeVal, problems, newState)
+              Error str -> (Justt recoverVal, Problem functionName str : problems, state)
     )
 
 infixl 3 <?>
 
+class FailMessage mon where
+  (<?>) :: mon a -> String -> mon a
+
 -- used to overwrite the error message with something more specific in case of an error.
-(<?>) :: Inference a -> String -> Inference a
-(Inference runState1) <?> msg =
-  Inference
-    ( \state -> case runState1 state of
-        result@(Justt _, _, _) -> result
-        (Error _, _, newState) -> (Error msg, [], newState)
-    )
+instance FailMessage Inference where
+  (<?>) :: Inference a -> String -> Inference a
+  (Inference runState1) <?> msg =
+    Inference
+      ( \state -> case runState1 state of
+          result@(Justt _, _, _) -> result
+          (Error _, _, newState) -> (Error msg, [], newState)
+      )
 
 -- helper function to make working with maybe computations in do notation easier
 liftError :: Maybe a -> Inference a

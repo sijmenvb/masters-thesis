@@ -75,6 +75,7 @@ executable masters-thesis
     Lexer.Tokens
     TypeInference.TypeInference
     TypeInference.TypeInferenceUtil
+    Suggestions.Suggestions
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:

@@ -7,6 +7,7 @@ import qualified Data.Map as Map
 import Lexer.LexerRunner
 import Parser.Parser
 import Parser.ParserBase
+import Suggestions.Suggestions
 import Text.Megaparsec
 import TypeInference.TypeInference (TypeEnvironment)
 import TypeInference.TypeInferenceUtil
@@ -29,7 +30,7 @@ standardTypeEnv = Map.empty
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
-  sourceString <- readFile "./test programs/test.hs"
+  sourceString <- readFile "./test programs/suggestions.hs"
   let maybeParsedTokens = runLexer sourceString
   case maybeParsedTokens of
     Left errorMsg -> putStrLn errorMsg
@@ -37,9 +38,10 @@ main = do
       let sections = sanitizeSections $ splitIntoSections parsedTokens
           parsedMaybeSections = List.map (parse pSection sourceString . tokensToParsableString sourceString) sections
           (parsedErrors, parsedSections) = partitionEithers parsedMaybeSections
-          (inferredTypes, problems) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
-       in
-          sequence_ $
+          parseProblemsBundle = getParseProblems parsedMaybeSections sections
+          (inferredTypes, inferenceProblems) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
+          inferenceProblemsBundle = matchProblems sections inferenceProblems
+       in sequence_ $
             [putStrLn "-----------------tokens:------------------"]
               ++ map print sections
               ++ [putStrLn "\n\n-----------------expressions:------------------"]
@@ -49,5 +51,7 @@ main = do
               ++ [putStrLn "\n\n-----------------Types:------------------"]
               ++ map print (Map.toList inferredTypes)
               ++ [putStrLn "\n-----------------Type errors:------------------"]
-              ++ map print problems
-               ++ [putStrLn "\n\n"]
+              ++ map print inferenceProblems
+              ++ [putStrLn "\n-----------------Suggestions:------------------"]
+              ++ map (print . generateSuggestion inferredTypes . fst) (reverse $ parseProblemsBundle ++ inferenceProblemsBundle)
+              ++ [putStrLn "\n\n"]

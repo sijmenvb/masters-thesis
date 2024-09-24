@@ -74,5 +74,5 @@ instance Show TypeCon where
   show TypeList = "List"
   show TypePair = "Pair"
 
-data Problem = Problem FunctionName String
+data Problem = Problem FunctionName String 
   deriving (Show)

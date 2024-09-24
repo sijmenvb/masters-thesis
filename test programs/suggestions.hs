@@ -3,7 +3,7 @@ plus :: Int -> Int -> Int
 
 val = 42 
 
-fun = plus plus 3 4 5
+fun = plus plus 3 4 fun2
 
 fun2 = plus 3 plus 4 5
 
