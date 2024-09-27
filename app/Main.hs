@@ -39,7 +39,7 @@ main = do
           parsedMaybeSections = List.map (parse pSection sourceString . tokensToParsableString sourceString) sections
           (parsedErrors, parsedSections) = partitionEithers parsedMaybeSections
           parseProblemsBundle = getParseProblems parsedMaybeSections sections
-          (inferredTypes, inferenceProblems) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
+          (inferredTypes, inferenceProblems,state) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)
           inferenceProblemsBundle = matchProblems sections inferenceProblems
        in sequence_ $
             [putStrLn "-----------------tokens:------------------"]
@@ -53,5 +53,5 @@ main = do
               ++ [putStrLn "\n-----------------Type errors:------------------"]
               ++ map print inferenceProblems
               ++ [putStrLn "\n-----------------Suggestions:------------------"]
-              ++ map (print . generateSuggestion inferredTypes . fst) (reverse $ parseProblemsBundle ++ inferenceProblemsBundle)
+              ++ map (print . generateSuggestion state inferredTypes . fst) (reverse $ parseProblemsBundle ++ inferenceProblemsBundle)
               ++ [putStrLn "\n\n"]

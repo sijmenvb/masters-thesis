@@ -1,3 +1,6 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Eta reduce" #-}
 module Suggestions.Suggestions where
 
 import qualified Data.Map as Map
@@ -8,6 +11,9 @@ import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec (ParseErrorBundle, errorBundlePretty)
 import TypeInference.TypeInference
+
+indexedMap :: (Int -> a -> b) -> [a] -> [b]
+indexedMap f xs = zipWith f [0 ..] xs
 
 getSectionName :: [TokenInfo] -> String
 getSectionName list = case list of
@@ -39,21 +45,23 @@ getParseProblems parsedMaybeSections sections =
     []
     $ zip parsedMaybeSections sections
 
-generateSuggestion :: TypeEnvironment -> [TokenInfo] -> MaybeError Section
-generateSuggestion typeEnv tokens =
-  let name = getSectionName tokens
+generateSuggestion :: InferenceState -> TypeEnvironment -> [TokenInfo] -> MaybeError Section
+generateSuggestion state typeEnv tokens =
+  let functionName = getSectionName tokens
       getArguments :: [TokenInfo] -> [WithSimplePos LabelIdentifier]
       getArguments list = case list of
-        (TokenInfo EqualsSign _ _ _ : xs) -> []
+        (TokenInfo EqualsSign _ _ _ : _) -> []
         (TokenInfo (Name name) _ start end : xs) -> WithSimplePos start end name : getArguments xs
         (TokenInfo tok _ start end : xs) -> WithSimplePos start end ("weird token " ++ show tok) : getArguments xs
         _ -> []
       arguments = getArguments (drop 1 tokens)
+      argumentTypeVars :: TypeEnvironment
+      argumentTypeVars = Map.fromList $ indexedMap (\index (WithSimplePos _ _ name) -> (name,FreshVar $ state + index)) arguments
       expressionTokens = (drop 1 . dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign)) tokens
    in do
-        expr <- generateExpressionSuggestion typeEnv expressionTokens
-        return $ FunctionDefinition name arguments expr
-        <?> "could not generate a suggestion for " ++ show name ++ " " ++ show arguments ++ " " ++ show expressionTokens
+        expr <- generateExpressionSuggestion (Map.union argumentTypeVars typeEnv) expressionTokens
+        return $ FunctionDefinition functionName arguments expr
+        <?> "could not generate a suggestion for " ++ show functionName ++ " " ++ show arguments ++ " " ++ show expressionTokens
 
 generateExpressionSuggestion :: TypeEnvironment -> [TokenInfo] -> MaybeError (WithSimplePos Expr)
 generateExpressionSuggestion typeEnv tokens = Error "TODO: implement me"

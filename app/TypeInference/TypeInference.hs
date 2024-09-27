@@ -101,8 +101,8 @@ type InferenceState = Int
 
 newtype Inference a = Inference {runState :: InferenceState -> (MaybeError a, [Problem], InferenceState)}
 
-runInference :: InferenceState -> Inference a -> (MaybeError a, [Problem])
-runInference state (Inference run) = let (maybeError, problems, _) = run state in (maybeError, problems)
+runInference :: InferenceState -> Inference a -> (MaybeError a, [Problem], InferenceState)
+runInference state (Inference run) = run state
 
 instance Functor Inference where
   fmap :: (a -> b) -> Inference a -> Inference b

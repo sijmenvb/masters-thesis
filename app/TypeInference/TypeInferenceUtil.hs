@@ -55,7 +55,7 @@ sortSectionsOnDependencies sections =
           )
           sections
 
-inferTypeEnvironment :: TypeEnvironment -> [Section] -> (TypeEnvironment, [Problem])
+inferTypeEnvironment :: TypeEnvironment -> [Section] -> (TypeEnvironment, [Problem],InferenceState)
 inferTypeEnvironment typeEnv sections =
   let orderedSections :: [Section]
       orderedSections = List.map fst $ sortSectionsOnDependencies sections
@@ -100,7 +100,7 @@ inferTypeEnvironment typeEnv sections =
                   return $ Map.insert name inferredType typeEnvIn
               )
 
-      (maybeEnv, problems) = runInference 0 $ Monad.foldM processSection typeEnv orderedSections
+      (maybeEnv, problems,state) = runInference 0 $ Monad.foldM processSection typeEnv orderedSections
    in case maybeEnv of
-        Justt finalTypeEnv -> (finalTypeEnv, problems)
-        Error str -> (typeEnv, Problem "ERROR!!!!" str : problems) -- if this happens you probably forgot a recover somewhere.
+        Justt finalTypeEnv -> (finalTypeEnv, problems,state)
+        Error str -> (typeEnv, Problem "ERROR!!!!" str : problems,state) -- if this happens you probably forgot a recover somewhere.
