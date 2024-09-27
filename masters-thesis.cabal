@@ -83,7 +83,7 @@ executable masters-thesis
   -- Other library packages from which modules are imported.
   build-depends:
     , array        >=0.5.4.0
-    , base         ^>=4.16.4.0
+    , base         
     , mtl
     , containers
     , megaparsec

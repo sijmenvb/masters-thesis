@@ -38,6 +38,10 @@ instance Show a => Show (MaybeError a) where
   show (Justt x) = "Just " ++ show x
   show (Error err) = "Error: " ++ err
 
+instance MonadFail MaybeError where
+  fail :: String -> MaybeError a
+  fail str = Error str
+
 instance FailMessage MaybeError where
   (<?>) :: MaybeError a -> String -> MaybeError a
   maybeErr <?> msg =
@@ -167,10 +171,18 @@ instance FailMessage Inference where
           (Error _, _, newState) -> (Error msg, [], newState)
       )
 
+class Errorable err where
+  liftError :: Maybe a -> err a
 -- helper function to make working with maybe computations in do notation easier
-liftError :: Maybe a -> Inference a
-liftError (Just x) = pure x
-liftError Nothing = Inference (\state -> (Error "", [], state))
+instance Errorable Inference where
+  liftError :: Maybe a -> Inference a
+  liftError (Just x) = pure x
+  liftError Nothing = Inference (\state -> (Error "", [], state))
+
+instance Errorable MaybeError where
+  liftError :: Maybe a -> MaybeError a
+  liftError (Just x) = Justt x
+  liftError Nothing = Error ""
 
 -- get a fresh variable
 freshVar :: Inference Type
