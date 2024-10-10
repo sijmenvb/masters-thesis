@@ -1,3 +1,4 @@
+{-# LANGUAGE InstanceSigs #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
@@ -33,8 +34,12 @@ data WithSimplePos a = WithSimplePos
   }
 
 instance Show a => Show (WithSimplePos a) where
+  show :: Show a => WithSimplePos a -> String
   show (WithSimplePos (startLine, startCol) (endLine, endCol) value) =
-    show value ++ "[" ++ show startLine ++ ":" ++ show startCol ++ "-" ++ show endLine ++ ":" ++ show endCol ++ "]"
+    let showPos = False
+     in if showPos
+          then show value ++ "[" ++ show startLine ++ ":" ++ show startCol ++ "-" ++ show endLine ++ ":" ++ show endCol ++ "]"
+          else show value
 
 keepPos :: (a2 -> a1) -> WithSimplePos a2 -> WithSimplePos a1
 keepPos fun (WithSimplePos start end val) = WithSimplePos start end $ fun val
@@ -46,8 +51,7 @@ data MyStream = MyStream
   deriving (Show)
 
 tokensToParsableString :: String -> [TokenInfo] -> MyStream
-tokensToParsableString source tokens = MyStream (tokensToString source tokens ) (map liftTokenInfo tokens)
-
+tokensToParsableString source tokens = MyStream (tokensToString source tokens) (map liftTokenInfo tokens)
 
 -- tokensToString generated using chatgpt. (it did have an incorrect +1 in there....)
 tokensToString :: String -> [TokenInfo] -> String

@@ -76,6 +76,7 @@ executable masters-thesis
     TypeInference.TypeInference
     TypeInference.TypeInferenceUtil
     Suggestions.Suggestions
+    Suggestions.TokenDifference
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -90,6 +91,7 @@ executable masters-thesis
     , rio          >=0.1.12.0
     , text
     , utf8-string  >=1
+    , ansi-terminal
 
   -- Directories containing source files.
   hs-source-dirs:     app
