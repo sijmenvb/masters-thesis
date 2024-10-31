@@ -7,8 +7,9 @@ import Lexer.Tokens
 import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec
+import Data.Foldable
 
-rightAssociative :: (WithSimplePos a -> WithSimplePos a -> WithSimplePos a) -> WithSimplePos a -> [WithSimplePos a] -> WithSimplePos a 
+rightAssociative :: (WithSimplePos a -> WithSimplePos a -> WithSimplePos a) -> WithSimplePos a -> [WithSimplePos a] -> WithSimplePos a
 rightAssociative constructor first (x1:x2:xs) = constructor first (rightAssociative constructor x1 (x2:xs))
 rightAssociative constructor first [x1] = constructor first x1
 rightAssociative _ first [] = first
@@ -30,13 +31,27 @@ splitIntoSections listIn = map reverse $ splitIntoSections' [] 0 listIn
     splitIntoSections' acc _ [tok] = [tok : acc]
     splitIntoSections' acc _ [] = [acc]
 
--- to remove leading enters and remove empty/whitespace only sections.
+-- to remove leading enters and remove empty/whitespace only sections. (and trailing nextLines)
 sanitizeSections :: [[TokenInfo]] -> [[TokenInfo]]
-sanitizeSections (list@(tok1 : toks) : rest) = case token_type tok1 of
-  Newline -> sanitizeSections (toks : rest)
-  _ -> list : sanitizeSections rest
-sanitizeSections ([] : rest) = sanitizeSections rest
-sanitizeSections x = x
+sanitizeSections sections = let
+  sanitizeSections2 (list@(tok1 : toks) : rest) = case token_type tok1 of
+    Newline -> sanitizeSections (toks : rest)
+    _ -> list : sanitizeSections rest
+  sanitizeSections2 ([] : rest) = sanitizeSections rest
+  sanitizeSections2 x = x
+  removeTrailing tok = reverse . dropWhile (\x -> tok == token_type x) . reverse
+
+  removeComments = filter (not . isCommentOrNewlineAfterComment . token_type)
+
+  isCommentOrNewlineAfterComment :: Lexer.Tokens.Token -> Bool
+  isCommentOrNewlineAfterComment NewlineAfterComment = True
+  isCommentOrNewlineAfterComment (Comment _)             = True
+  isCommentOrNewlineAfterComment _                   = False
+
+  in map (removeTrailing Newline)
+    . sanitizeSections2
+    -- . map removeComments
+     $ sections
 
 nameToString :: Parser (WithSimplePos Lexer.Tokens.Token) -> Parser (WithSimplePos String)
 nameToString nametoken = do
@@ -126,6 +141,6 @@ pExpr =
       -- used to construct Application (constructor of Expr)
       applicationFold :: [WithSimplePos Expr] -> WithSimplePos Expr
       applicationFold [x] = x
-      applicationFold (firstItem : rest) = foldl buildApplication firstItem rest
+      applicationFold (firstItem : rest) = foldl' buildApplication firstItem rest
       applicationFold _ = error "unreachable state, some should guarantee at least one item in the list."
    in applicationFold <$> some (pParentheses <|> pBool <|> pExprInt <|> pLabel <|> pLambda <|> pLetExpr)

@@ -49,8 +49,6 @@ instance FailMessage MaybeError where
       result@(Justt _) -> result
       (Error _) -> Error msg
 
-type TypeEnvironment = Map.Map LabelIdentifier Type
-
 type Substitution = Map.Map Type Type
 
 freeExpressionVariables :: WithSimplePos Expr -> Set.Set LabelIdentifier

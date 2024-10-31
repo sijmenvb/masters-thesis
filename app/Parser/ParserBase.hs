@@ -53,13 +53,11 @@ data MyStream = MyStream
 tokensToParsableString :: String -> [TokenInfo] -> MyStream
 tokensToParsableString source tokens = MyStream (tokensToString source tokens) (map liftTokenInfo tokens)
 
--- tokensToString generated using chatgpt. (it did have an incorrect +1 in there....)
 tokensToString :: String -> [TokenInfo] -> String
 tokensToString _ [] = ""
-tokensToString str tokens = take (endIndex - startIndex) . drop startIndex $ str
+tokensToString str tokens = drop startIndex str
   where
     startIndex = let (line, col) = Tokens.start_pos (head tokens) in getIndex line col
-    endIndex = let (line, col) = Tokens.end_pos (last tokens) in getIndex line col
 
     -- Convert (line, col) to a single index in the string
     getIndex :: Int -> Int -> Int
@@ -67,7 +65,8 @@ tokensToString str tokens = take (endIndex - startIndex) . drop startIndex $ str
 
 liftTokenInfo :: TokenInfo -> WithPos TokenInfo
 liftTokenInfo tok@TokenInfo {start_pos = (lineBegin, columnBegin), end_pos = (lineEnd, columnEnd), token_string = str} =
-  WithPos (SourcePos "" (mkPos lineBegin) (mkPos columnBegin)) (SourcePos "" (mkPos lineEnd) (mkPos columnEnd)) (Data.Text.length str) tok
+  let nonZero = max 1 -- megaparsec has 1 as the first position not 0, no idea why it works for all other values...
+   in WithPos (SourcePos "" (mkPos $ nonZero lineBegin) (mkPos $ nonZero columnBegin)) (SourcePos "" (mkPos $ nonZero lineEnd) (mkPos $ nonZero columnEnd)) (Data.Text.length str) tok
 
 instance Stream MyStream where
   type Token MyStream = WithPos TokenInfo

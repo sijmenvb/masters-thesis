@@ -1,5 +1,7 @@
 module Parser.Types where
 import Parser.ParserBase 
+import qualified Data.Map as Map
+import Data.Maybe
 
 
 
@@ -76,3 +78,8 @@ instance Show TypeCon where
 
 data Problem = Problem FunctionName String 
   deriving (Show)
+
+
+type TypeEnvironment = Map.Map LabelIdentifier Type
+
+

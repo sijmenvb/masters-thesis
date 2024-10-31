@@ -340,7 +340,7 @@ commentAction inp inp_len = do
 
   return $
     TokenInfo
-      { token_type = Comment,
+      { token_type = Comment $ T.unpack token_string,
         token_string = token_string,
         start_pos = start_pos,
         end_pos = end_pos
@@ -360,9 +360,11 @@ multiLineCommentAction inp inp_len =
     let (comment, rest) = slitOnEnd current_inp
     let endPosition = L.foldl alexMove pos comment -- for performance we might want to change slitOnEnd to ave type AlexPosn -> String -> ((Int,AlexPosn), String)
     let newInput = (endPosition, c, bs, rest)
+
+    let commentToken = Comment "" --TODO: give the actual string here.
     alexSetInput newInput
-    alexSetPrevToken Comment
-    pure (constructToken Comment inp (inp_len + length comment) newInput)
+    alexSetPrevToken commentToken
+    pure (constructToken commentToken inp (inp_len + length comment) newInput)
   where
     -- \|
     slitOnEnd :: String -> (String, String)

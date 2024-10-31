@@ -4,16 +4,21 @@
 {-# HLINT ignore "Use tuple-section" #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# HLINT ignore "Replace case with fromMaybe" #-}
+{-# HLINT ignore "Use lambda-case" #-}
 module Suggestions.Suggestions where
 
+import Data.Foldable
+import Data.IntMap (insert)
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
+import Data.Tree (Tree (subForest))
 import Data.Void
-import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type))
+import GHC.Base (TyCon (TyCon))
+import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOriginalShow, showTokenInfoWithPosition)
 import Parser.ParserBase
 import Parser.Types
-import Suggestions.TokenDifference (testfunc, ExtendedTokens, generateActions, Action)
-import Text.Megaparsec (ParseErrorBundle, errorBundlePretty)
+import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, testfunc)
+import Text.Megaparsec (ParseErrorBundle, between, errorBundlePretty)
 import TypeInference.TypeInference
 
 indexedMap :: (Int -> a -> b) -> [a] -> [b]
@@ -49,8 +54,13 @@ getParseProblems parsedMaybeSections sections =
     []
     $ zip parsedMaybeSections sections
 
--- generateSuggestion :: InferenceState -> TypeEnvironment -> [TokenInfo] -> MaybeError (Section, Type)
---generateSuggestion :: Int-> Map.Map String Type-> [TokenInfo]-> MaybeError ([Suggestions.TokenDifference.Action Token], Type)
+dropTypeArguments :: [WithSimplePos LabelIdentifier] -> TypeEnvironment -> Type -> MaybeError (Type, TypeEnvironment)
+dropTypeArguments arguments typeEnv typ =
+  case (arguments, typ) of
+    ([], t) -> Justt (t, typeEnv)
+    ((WithSimplePos _ _ identifier) : xs, TypeArrow a b) -> dropTypeArguments xs (Map.insert identifier a typeEnv) b
+    ((WithSimplePos _ _ identifier) : xs, _) -> Error $ "Cannot remove " ++ show identifier ++ " from " ++ show typ ++ "!"
+
 generateSuggestion state typeEnv tokens =
   let functionName = getSectionName tokens
       getArguments :: [TokenInfo] -> [WithSimplePos LabelIdentifier]
@@ -59,25 +69,65 @@ generateSuggestion state typeEnv tokens =
         (TokenInfo (Name name) _ start end : xs) -> WithSimplePos start end name : getArguments xs
         (TokenInfo tok _ start end : xs) -> WithSimplePos start end ("weird token " ++ show tok) : getArguments xs
         _ -> []
-      arguments = getArguments (drop 1 tokens)
-      argumentTypeVars :: TypeEnvironment
-      argumentTypeVars = Map.fromList $ indexedMap (\index (WithSimplePos _ _ name) -> (name, FreshVar $ state + index)) arguments
-      expressionTokens = (drop 1 . dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign)) tokens
 
-      typeGoal :: Type
-      typeGoal = case Map.lookup functionName typeEnv of
-        Just x -> x
-        Nothing -> FreshVar $ state + length argumentTypeVars
+      arguments :: [WithSimplePos LabelIdentifier]
+      arguments = getArguments (tail tokens)
+
+      argumentTypeVars :: TypeEnvironment
+      argumentTypeVars = 
+        case Map.lookup functionName typeEnv of
+          -- in case no type was given just make the arguments free variables.
+          _ -> Map.fromList $ indexedMap (\index (WithSimplePos _ _ name) -> (name, FreshVar $ state + index)) arguments
+          Just expectedFunctionType -> Map.empty
+
+      expressionTokens = (tail . dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign)) tokens
+
+      buildReturnType :: TypeEnvironment -> [WithSimplePos LabelIdentifier] -> Type -> MaybeError Type
+      buildReturnType typeEnv args typ =
+        let go argsIn = case argsIn of
+              [] -> Justt typ
+              (WithSimplePos _ _ identifier) : xs ->
+                do
+                  argType <- liftError $ Map.lookup identifier typeEnv
+                  resultType <- go xs
+                  return $ TypeArrow argType resultType
+         in go $ reverse args
    in do
-        (expr, typ) <- runSugesstionBuilder (generateExpressionSuggestion typeEnv typeGoal) expressionTokens
+        (typeGoal, typeEnvWithArgs) <- case Map.lookup functionName typeEnv of
+          Just x -> dropTypeArguments arguments typeEnv x
+          Nothing -> Justt (FreshVar $ state + length argumentTypeVars, Map.union argumentTypeVars typeEnv)
+        let builder =
+              do
+                setTypeEnvironment (typeEnvWithArgs)
+                generateExpressionSuggestion typeGoal
+        ((expr, typ), builderState) <- runSugesstionBuilder builder expressionTokens
         let section = FunctionDefinition functionName arguments expr
-        let (expectedTokens ,_) = testfunc section
+        let (expectedTokens, _) = testfunc section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
-        return ( expectedTokens,generateActions expectedTokens tokenList, typ)
+        let actionTokens = generateActions expectedTokens tokenList
+        finalType <- buildReturnType (getEnvironmentFromState builderState) arguments typ
+        return
+          ( expectedTokens,
+            recreateOriginalShow $
+              mapMaybe
+                ( \action -> case action of
+                    Keep a -> Just a
+                    Add a -> Just a
+                    Remove _ -> Nothing
+                )
+                actionTokens,
+            recreateOriginalWithDifferencesShow actionTokens,
+            finalType
+          )
 
 -- <?> "could not generate a suggestion for " ++ show name ++ " " ++ show arguments ++ " " ++ show expressionTokens
 
-newtype SuggestionBuilder a = RunState ([TokenInfo] -> (MaybeError a, [TokenInfo]))
+data SuggestionBuilderState = State
+  { getTokensFromState :: [TokenInfo],
+    getEnvironmentFromState :: TypeEnvironment
+  }
+
+newtype SuggestionBuilder a = RunState (SuggestionBuilderState -> (MaybeError a, SuggestionBuilderState))
 
 instance Functor SuggestionBuilder where
   fmap :: (a -> b) -> SuggestionBuilder a -> SuggestionBuilder b
@@ -130,25 +180,42 @@ instance Errorable SuggestionBuilder where
   liftError (Just a) = pure a
   liftError Nothing = fail ""
 
-runSugesstionBuilder :: SuggestionBuilder a -> [TokenInfo] -> MaybeError a
-runSugesstionBuilder (RunState run) tokens = fst (run tokens)
+runSugesstionBuilder :: SuggestionBuilder a -> [TokenInfo] -> MaybeError (a, SuggestionBuilderState)
+runSugesstionBuilder (RunState run) tokens =
+  let (ma, state) = run State {getTokensFromState = tokens, getEnvironmentFromState = Map.empty}
+   in do
+        a <- ma
+        return (a, state)
+
+getTypeEnvironment :: SuggestionBuilder TypeEnvironment
+getTypeEnvironment =
+  RunState (\state -> (Justt $ getEnvironmentFromState state, state))
+
+setTypeEnvironment :: TypeEnvironment -> SuggestionBuilder ()
+setTypeEnvironment env = RunState (\state -> (Justt (), state {getEnvironmentFromState = env}))
+
+applySubstitutionToSuggestionBuilder :: Substitution -> SuggestionBuilder ()
+applySubstitutionToSuggestionBuilder sub =
+  do
+    currentEnv <- getTypeEnvironment
+    setTypeEnvironment $ Map.insert ("added " ++ show sub) (TypeCon TypeBool) $ applySubstitutionToTypeEnvironment sub currentEnv
 
 getTokens :: SuggestionBuilder [TokenInfo]
 getTokens =
-  RunState (\state -> (Justt state, state))
+  RunState (\state -> (Justt $ getTokensFromState state, state))
 
 popToken :: SuggestionBuilder TokenInfo
 popToken =
   RunState
-    ( \state -> case state of
+    ( \state -> case getTokensFromState state of
         [] -> (Error "no items to pop", state)
-        (x : xs) -> (Justt x, xs)
+        (x : xs) -> (Justt x, state {getTokensFromState = xs})
     )
 
 hasTokens :: SuggestionBuilder Bool
 hasTokens =
   RunState
-    ( \state -> case state of
+    ( \state -> case getTokensFromState state of
         [] -> (Justt False, state)
         _ -> (Justt True, state)
     )
@@ -161,50 +228,70 @@ try (RunState run1) (RunState run2) =
         (Error _, _) -> run2 state
     )
 
-generateExpressionSuggestion :: TypeEnvironment -> Type -> SuggestionBuilder (WithSimplePos Expr, Type)
-generateExpressionSuggestion typeEnv goal =
-  let getArguments remainingType =
+getToken :: SuggestionBuilder TokenInfo -> SuggestionBuilder TokenInfo
+getToken x = do
+  hasTok <- hasTokens
+  if hasTok
+    then popToken
+    else x
+
+generateExpressionSuggestion :: Type -> SuggestionBuilder (WithSimplePos Expr, Type)
+generateExpressionSuggestion goal =
+  let -- getArguments returns the list of arguments that can be applied to the function, consuming the tokens in the process.
+      -- it also gives the type of the expression up to that point.
+      -- See Note [suggestions/getArguments]
+      getArguments :: TokenInfo -> Type -> SuggestionBuilder [(WithSimplePos Expr, Type)]
+      getArguments functionInfo remainingType =
         case remainingType of
           TypeArrow argTyp retTyp -> do
-            (argExpr, typ) <- generateExpressionSuggestion typeEnv argTyp
+            (argExpr, typ) <- generateExpressionSuggestion argTyp
             case retTyp of
-              TypeArrow argTyp2 retTyp2 ->
-                case (not . null $ mostGeneralUnifier retTyp goal, not . null $ mostGeneralUnifier retTyp2 goal) of
-                  (True, True) ->
-                    try
+              TypeArrow argTyp2 retTyp3 ->
+                -- if the function can take more arguments
+                case mostGeneralUnifier retTyp goal of
+                  (Just sub1) ->
+                    -- if both the partial application and the application of a (potential) second argument would type check.
+                    try -- first try taking more arguments
                       ( do
-                          arguments <- getArguments retTyp
+                          arguments <- getArguments functionInfo retTyp 
                           return $ (argExpr, retTyp) : arguments
                       )
-                      (return [(argExpr, retTyp)])
+                      ( return [(argExpr, retTyp)]
+                      )
                   _ -> do
-                    arguments <- getArguments retTyp
+                    arguments <- getArguments functionInfo retTyp <?> "Not Enough tokens to satisfy goal:\n\t" ++ show goal ++ "\nWe only got to:\n\t"++ show retTyp ++"\nWhile applying arguments to the function \""++ showTokenInfoWithPosition functionInfo ++"\"!"
                     return $ (argExpr, typ) : arguments
-              _ -> return [(argExpr, typ)]
-          _ -> fail "too many arguments"
+              _ -> return [(argExpr, retTyp)] -- TODO: should this be retTyp?
+          _ -> return [] -- not a function.
    in do
-        hasTok <- hasTokens
-        if hasTok
-          then do
-            tok <- popToken
-            case tok of
-              (TokenInfo (Name name) _ start end) -> do
-                typ <- liftError (Map.lookup name typeEnv) <?> "could not find " ++ name ++ " in type environment"
-                hasTok2 <- hasTokens
-                if not hasTok2
-                  then
-                    if null (mostGeneralUnifier typ goal)
-                      then fail "could not build up type"
-                      else return (WithSimplePos start end (Label name), typ)
-                  else do
-                    argsAndTypes <- getArguments typ
-                    let args = map fst argsAndTypes
-                    let retTyp = snd $ last argsAndTypes
-                    let argumentExpression = foldl (\item expr -> WithSimplePos start end (Application item expr)) (WithSimplePos start end (Label name)) args
+        tok <- getToken (fail $ "Not Enough tokens to satisfy goal:\n" ++ show goal ++ "\n!")
+        case tok of
+          -- we have a function or constant
+          (TokenInfo (Name name) _ start end) -> do
+            typeEnv <- getTypeEnvironment
+            typ <- liftError (Map.lookup name typeEnv) <?> "could not find " ++ name ++ " in type environment"
+            argsAndTypes <- getArguments tok typ --get the arguments to the function
+            case argsAndTypes of
+              -- there are no arguments
+              [] -> case mostGeneralUnifier typ goal of
+                Nothing ->  fail $ "could not unify:\n" ++ show typ ++ "\nwith the goal:\n" ++ show goal ++ "\nas result of the function \"" ++ name ++ "\""
+                Just sub -> do
+                  applySubstitutionToSuggestionBuilder sub
+                  return (WithSimplePos start end (Label name), typ) -- todo: should the typ be goal instead?
+              -- there are arguments for the function
+              _ -> do
+                let args = map fst argsAndTypes
+                let retTyp = snd $ last argsAndTypes
+                let argumentExpression = foldl' (\item expr -> WithSimplePos start end (Application item expr)) (WithSimplePos start end (Label name)) args
+                case mostGeneralUnifier retTyp goal of
+                  Nothing -> fail $ "could not unify:\n\t" ++ show retTyp ++ "\nwith the goal:\n\t" ++ show goal ++ "\nas result of the function \"" ++ name ++ "\""
+                  Just sub -> do
+                    applySubstitutionToSuggestionBuilder sub
                     return (argumentExpression, retTyp)
-              (TokenInfo (Number num) _ start end) ->
-                if null (mostGeneralUnifier (TypeCon TypeInt) goal)
-                  then fail "Int does not match"
-                  else return (WithSimplePos start end (Int num), TypeCon TypeInt)
-              _ -> generateExpressionSuggestion typeEnv goal
-          else fail "Not Enough tokens to satisfy goal!"
+          (TokenInfo (Number num) _ start end) ->
+            case mostGeneralUnifier (TypeCon TypeInt) goal of
+              Nothing -> fail $ "Int does not match " ++ show goal
+              Just sub -> do
+                applySubstitutionToSuggestionBuilder sub
+                return (WithSimplePos start end (Int num), TypeCon TypeInt)
+          _ -> generateExpressionSuggestion goal
