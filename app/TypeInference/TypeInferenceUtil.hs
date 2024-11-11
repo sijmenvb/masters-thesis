@@ -32,9 +32,9 @@ gatherDepths sections =
 
       result =
         List.foldl
-          ( \map section -> case section of
-              (FunctionDefinition name _ _) -> Map.insert name (calculateDepth section) map
-              (FunctionType _ _) -> map
+          ( \myMap section -> case section of
+              (FunctionDefinition name _ _) -> Map.insert name (calculateDepth section) myMap
+              (FunctionType _ _) -> myMap
           )
           Map.empty
           sections

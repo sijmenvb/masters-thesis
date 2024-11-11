@@ -8,11 +8,12 @@ import Lexer.LexerRunner
 import Lexer.Tokens (TokenInfo)
 import Parser.Parser
 import Parser.ParserBase
-import Parser.Types (Problem, Type, TypeEnvironment)
+import Parser.Types (Problem, Type, TypeEnvironment, getNameFromProblem)
 import Suggestions.Suggestions
 import Text.Megaparsec
 import TypeInference.TypeInference (MaybeError (..))
 import TypeInference.TypeInferenceUtil
+import Debug.Trace
 
 {-
 main :: IO ()
@@ -57,7 +58,7 @@ main = do
               ++ map print inferenceProblems
               ++ [putStrLn $ "\n-----------------Suggestions:------------------" ++ show (length (parseProblemsBundle ++ inferenceProblemsBundle))]
               ++ map (makeSuggestion state inferredTypes) (reverse $ parseProblemsBundle ++ inferenceProblemsBundle)
-              ++ [putStrLn "\n\n"]
+              ++ [putStrLn "\n\nDONE!\n\n"]
 
 makeSuggestion :: Int -> TypeEnvironment -> ([TokenInfo], Problem) -> IO ()
 makeSuggestion state inferredTypes problembundle =
@@ -72,4 +73,4 @@ makeSuggestion state inferredTypes problembundle =
               putStrLn $ "--Which has type: " ++ show typ,
               putStrLn "------------------------------------"
             ]
-        Error str -> sequence_ [putStrLn $ "ERROR in" ++ show problembundle, putStrLn str, putStrLn "------------------------------------"]
+        Error str -> sequence_ [putStrLn $ "Problem generating suggestion for " ++ show (getNameFromProblem $ snd problembundle), putStrLn str, putStrLn "------------------------------------"]

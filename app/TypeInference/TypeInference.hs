@@ -108,7 +108,9 @@ runInference state (Inference run) = run state
 
 instance Functor Inference where
   fmap :: (a -> b) -> Inference a -> Inference b
-  fmap f x = x >>= (\x -> pure (f x))
+  fmap f mx = do
+    x <- mx
+    return (f x)
 
 instance Applicative Inference where
   pure :: a -> Inference a
@@ -171,6 +173,7 @@ instance FailMessage Inference where
 
 class Errorable err where
   liftError :: Maybe a -> err a
+
 -- helper function to make working with maybe computations in do notation easier
 instance Errorable Inference where
   liftError :: Maybe a -> Inference a

@@ -1,9 +1,8 @@
 module Parser.Types where
-import Parser.ParserBase 
+
 import qualified Data.Map as Map
 import Data.Maybe
-
-
+import Parser.ParserBase
 
 type FunctionName = String
 
@@ -20,17 +19,18 @@ data Expr
   | LambdaAbstraction LabelIdentifier (WithSimplePos Expr)
   | LetExpression Pattern (WithSimplePos Expr) (WithSimplePos Expr)
 
---used to construct a application while preserving position information
-buildApplication ::WithSimplePos Expr ->WithSimplePos Expr -> WithSimplePos Expr
+-- used to construct a application while preserving position information
+buildApplication :: WithSimplePos Expr -> WithSimplePos Expr -> WithSimplePos Expr
 buildApplication expr1@(WithSimplePos start _ _) expr2@(WithSimplePos _ end _) = WithSimplePos start end $ Application expr1 expr2
+
 -- instance Show Expr generated with chatgpt.
 instance Show Expr where
   show (Parentheses expr) = "( " ++ show expr ++ " )"
-  show (Application func arg) = "(" ++show func ++ " " ++ show arg ++ " )"
+  show (Application func arg) = "(" ++ show func ++ " " ++ show arg ++ " )"
   show (Int n) = show n
   show (Bool b) = show b
   show (Label label) = label
-  show (LambdaAbstraction name expr) = "\\" ++  name ++ " -> " ++ show expr
+  show (LambdaAbstraction name expr) = "\\" ++ name ++ " -> " ++ show expr
   show (LetExpression patttern expr1 expr2) = "let " ++ show patttern ++ " = " ++ show expr1 ++ " in " ++ show expr2
 
 -- used to store function definitions that look like:
@@ -44,22 +44,32 @@ instance Show Section where
   show (FunctionDefinition name args body) =
     name ++ " " ++ unwords (map show args) ++ " = " ++ show body
   show (FunctionType name typ) =
-    name ++  " :: " ++ show typ
+    name ++ " :: " ++ show typ
 
 data Type
   = TypeVar TypeVar
   | FreshVar Int
   | TypeCon TypeCon
   | TypeArrow Type Type
-  --TODO: add type applications
+  -- TODO: add type applications
   deriving (Eq, Ord)
 
-instance Show Type where
-    show (TypeVar typeVar) = typeVar
-    show (FreshVar num) = "v" ++ show num
-    show (TypeCon typeCon) = show typeCon
-    show (TypeArrow typ1 typ2) = "(" ++ show typ1 ++ " -> " ++ show typ2 ++ ")"
+typeToArguments :: Type -> ([Type], Type)
+typeToArguments typ =
+  case typ of
+    (TypeArrow arg rest) ->
+      let (args, result) = typeToArguments rest
+       in (arg : args, result)
+    _ -> ([], typ)
 
+buildTypeFromArguments :: [Type] -> Type -> Type
+buildTypeFromArguments arguments returnType = foldr TypeArrow returnType arguments
+
+instance Show Type where
+  show (TypeVar typeVar) = typeVar
+  show (FreshVar num) = "v" ++ show num
+  show (TypeCon typeCon) = show typeCon
+  show (TypeArrow typ1 typ2) = "(" ++ show typ1 ++ " -> " ++ show typ2 ++ ")"
 
 type TypeVar = String
 
@@ -76,10 +86,10 @@ instance Show TypeCon where
   show TypeList = "List"
   show TypePair = "Pair"
 
-data Problem = Problem FunctionName String 
+data Problem = Problem FunctionName String
   deriving (Show)
 
+getNameFromProblem :: Problem -> FunctionName
+getNameFromProblem (Problem name _) = name
 
 type TypeEnvironment = Map.Map LabelIdentifier Type
-
-

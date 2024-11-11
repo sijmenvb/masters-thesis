@@ -163,6 +163,7 @@ generateActions extTokensIn tokensIn =
       getTokenRemovalWeight tok = case tok of
         Name _ -> 15
         Number _ -> 15
+        Indent -> standardWeight `div` 2
         _ -> standardWeight
 
       -- append is probably a terrible name
@@ -214,8 +215,9 @@ generateActions extTokensIn tokensIn =
             x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
             return $  minimumBy
               (compare `on` fst)
-              [ append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
+              [ 
                 append standardWeight (Add tok1) x2, -- add a missing token
+                append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
                 append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
               ]
           (Optional tok1 Nothing : extTokensRest, tok2 : tokRest)
