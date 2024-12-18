@@ -22,6 +22,14 @@ import Parser.Types
 import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, testfunc)
 import Text.Megaparsec (ParseErrorBundle, between, errorBundlePretty)
 import TypeInference.TypeInference
+  ( Errorable (..),
+    FailMessage (..),
+    MaybeError (..),
+    Substitution,
+    applySubstitution,
+    applySubstitutionToTypeEnvironment,
+    mostGeneralUnifier,
+  )
 
 indexedMap :: (Int -> a -> b) -> [a] -> [b]
 indexedMap f xs = zipWith f [0 ..] xs
@@ -63,6 +71,7 @@ dropTypeArguments arguments typeEnv typ =
     ((WithSimplePos _ _ identifier) : xs, TypeArrow a b) -> dropTypeArguments xs (Map.insert identifier a typeEnv) b
     ((WithSimplePos _ _ identifier) : xs, _) -> Error $ "Cannot take an argument from the type " ++ show typ ++ " to assign to " ++ show identifier ++ "!"
 
+generateSuggestion :: Int -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)
 generateSuggestion state typeEnv tokens =
   let functionName = getSectionName tokens
       getArguments :: [TokenInfo] -> [WithSimplePos LabelIdentifier]
@@ -102,31 +111,35 @@ generateSuggestion state typeEnv tokens =
               do
                 setTypeEnvironment (typeEnvWithArgs)
                 generateExpressionSuggestion typeGoal
-        ((expr, typ), builderState) <- runSugesstionBuilder builder expressionTokens
+        ((expr, typ), builderState) <- runSugesstionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
         let section = FunctionDefinition functionName arguments expr
         let (expectedTokens, _) = testfunc section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
         let actionTokens = generateActions expectedTokens tokenList
         finalType <- buildReturnType (getEnvironmentFromState builderState) arguments typ
-        return
-          ( expectedTokens,
-            recreateOriginalShow $
-              mapMaybe
-                ( \action -> case action of
-                    Keep a -> Just a
-                    Add a -> Just a
-                    Remove _ -> Nothing
-                )
-                actionTokens,
-            recreateOriginalWithDifferencesShow actionTokens,
-            finalType
-          )
+        trace (show (getEnvironmentFromState builderState)) $
+          return
+            ( expectedTokens,
+              recreateOriginalShow $
+                mapMaybe
+                  ( \action -> case action of
+                      Keep a -> Just a
+                      Add a -> Just a
+                      Remove _ -> Nothing
+                  )
+                  actionTokens,
+              recreateOriginalWithDifferencesShow actionTokens,
+              finalType,
+              getBranchCounterFromState builderState
+            )
 
 -- <?> "could not generate a suggestion for " ++ show name ++ " " ++ show arguments ++ " " ++ show expressionTokens
 
 data SuggestionBuilderState = State
   { getTokensFromState :: [TokenInfo],
-    getEnvironmentFromState :: TypeEnvironment
+    getEnvironmentFromState :: TypeEnvironment,
+    getFreshVarCounterFromState :: Int,
+    getBranchCounterFromState :: Int
   }
   deriving (Show)
 
@@ -183,9 +196,9 @@ instance Errorable SuggestionBuilder where
   liftError (Just a) = pure a
   liftError Nothing = fail ""
 
-runSugesstionBuilder :: SuggestionBuilder a -> [TokenInfo] -> MaybeError (a, SuggestionBuilderState)
-runSugesstionBuilder (RunState run) tokens =
-  let (ma, state) = run State {getTokensFromState = tokens, getEnvironmentFromState = Map.empty}
+runSugesstionBuilder :: Int -> SuggestionBuilder a -> [TokenInfo] -> MaybeError (a, SuggestionBuilderState)
+runSugesstionBuilder freshVarCounter (RunState run) tokens =
+  let (ma, state) = run State {getTokensFromState = tokens, getEnvironmentFromState = Map.empty, getFreshVarCounterFromState = freshVarCounter, getBranchCounterFromState = 0}
    in do
         a <- ma
         return (a, state)
@@ -204,6 +217,33 @@ setTypeEnvironment :: TypeEnvironment -> SuggestionBuilder ()
 setTypeEnvironment env = do
   state <- getSuggestionBuilderState
   setSuggestionBuilderState state {getEnvironmentFromState = env}
+
+getFreshVarCounter :: SuggestionBuilder Int
+getFreshVarCounter = getFreshVarCounterFromState <$> getSuggestionBuilderState
+
+setFreshVarCounter :: Int -> SuggestionBuilder ()
+setFreshVarCounter counter = do
+  state <- getSuggestionBuilderState
+  setSuggestionBuilderState state {getFreshVarCounterFromState = counter}
+
+getFreshVar :: SuggestionBuilder Type
+getFreshVar = do
+  freshVarCounter <- getFreshVarCounter
+  setFreshVarCounter $ freshVarCounter + 1
+  return $ FreshVar freshVarCounter
+
+{- getBranchCounter :: SuggestionBuilder Int
+getBranchCounter = getBranchCounterFromState <$> getSuggestionBuilderState
+
+setBranchCounter :: Int -> SuggestionBuilder ()
+setBranchCounter branchCounter = do
+  state <- getSuggestionBuilderState
+  setSuggestionBuilderState state {getBranchCounterFromState = branchCounter}
+
+countBranch :: SuggestionBuilder ()
+countBranch = do
+  count <- getBranchCounter
+  setBranchCounter (count + 1) -}
 
 applySubstitutionToSuggestionBuilder :: Substitution -> SuggestionBuilder ()
 applySubstitutionToSuggestionBuilder sub =
@@ -237,7 +277,9 @@ try (RunState run1) (RunState run2) =
   RunState
     ( \state -> case run1 state of
         res@(Justt _, _) -> res
-        (Error _, _) -> run2 state
+        (Error str, _) ->
+          trace str $
+            run2 (state {getBranchCounterFromState = getBranchCounterFromState state + 1})
     )
 
 getToken :: SuggestionBuilder TokenInfo -> SuggestionBuilder TokenInfo
@@ -252,7 +294,7 @@ cycleExpression exprIn =
   let expressionToArguments :: WithSimplePos Expr -> ([(WithSimplePos Expr, (Int, Int), (Int, Int))], WithSimplePos Expr)
       expressionToArguments expr =
         case expr of
-          (WithSimplePos start end (Application expr1 expr2)) -> let (list, function) = expressionToArguments expr1 in (list++[(expr2, start, end)], function)
+          (WithSimplePos start end (Application expr1 expr2)) -> let (list, function) = expressionToArguments expr1 in (list ++ [(expr2, start, end)], function)
           _ -> ([], expr)
 
       buildExpressionFromArguments arguments function =
@@ -260,7 +302,7 @@ cycleExpression exprIn =
           [] -> function
           (x, start, end) : xs -> WithSimplePos start end (Application (buildExpressionFromArguments xs function) x)
    in case expressionToArguments exprIn of
-        (firstArg:restOfArgs, function) -> buildExpressionFromArguments (restOfArgs ++ [firstArg]) function
+        (firstArg : restOfArgs, function) -> buildExpressionFromArguments (restOfArgs ++ [firstArg]) function
         _ -> exprIn
 
 generateExpressionSuggestion :: Type -> SuggestionBuilder (WithSimplePos Expr, Type)
@@ -268,13 +310,13 @@ generateExpressionSuggestion goal =
   let -- getArguments returns the list of arguments that can be applied to the function, consuming the tokens in the process.
       -- it also gives the type of the expression up to that point.
       -- See Note [suggestions/getArguments]
-      getArguments :: TokenInfo -> Type -> SuggestionBuilder [(WithSimplePos Expr, Type, SuggestionBuilderState)]
-      getArguments functionInfo remainingType =
+      getArguments :: Type -> SuggestionBuilder [(WithSimplePos Expr, Type, SuggestionBuilderState)]
+      getArguments remainingType =
         let takeMoreArgs = case remainingType of
               TypeArrow argTyp retTyp -> do
                 (argExpr, _) <- generateExpressionSuggestion argTyp
                 stateAfterThisArg <- getSuggestionBuilderState
-                arguments <- getArguments functionInfo retTyp
+                arguments <- getArguments retTyp
                 return $ (argExpr, retTyp, stateAfterThisArg) : arguments
               _ -> return [] -- not a function.
          in try takeMoreArgs (return [])
@@ -285,7 +327,7 @@ generateExpressionSuggestion goal =
           (TokenInfo (Name name) _ start end) -> do
             typeEnv <- getTypeEnvironment
             typ <- liftError (Map.lookup name typeEnv) <?> "could not find " ++ name ++ " in type environment"
-            argsAndTypes <- getArguments tok typ -- get the arguments to the function
+            argsAndTypes <- getArguments typ -- get the arguments to the function
             let processArguments list =
                   case list of
                     -- there are no arguments
@@ -305,19 +347,52 @@ generateExpressionSuggestion goal =
                           applySubstitutionToSuggestionBuilder sub
                           return (argumentExpression, retTyp)
 
-                argumentAtDifferentPlace =
-                  case typeToArguments typ of
-                    (currentTarget : restOfArguments, returnType) ->
+                argumentAtDifferentPlace functionType =
+                  case typeToArguments functionType of
+                    (typeArguments, returnType) ->
                       do
-                        let cycledArguments = restOfArguments ++ [currentTarget]
-                        let cycledType = buildTypeFromArguments cycledArguments returnType
-                        newArgsAndTypes <- getArguments tok cycledType
-                        
-                        (newExpr, typ) <- processArguments (reverse newArgsAndTypes)
-                        return (cycleExpression newExpr, typ)
+                        freshVar <- getFreshVar
+                        (expr, foundArgumentType) <- generateExpressionSuggestion freshVar
+
+                        case firstMatchToFront foundArgumentType typeArguments of
+                          Nothing -> fail $ show foundArgumentType ++ " matches none of the arguments of " ++ show goal
+                          Just (indexFromBack, fittingArgumentsSequence) -> do
+                            let cycledType = buildTypeFromArguments (drop 1 fittingArgumentsSequence) returnType
+                            newArgsAndTypes <- getArguments cycledType
+
+                            (newExpr, typ) <-
+                              {- trace
+                                ( "\n\nfound: "
+                                    ++ show foundArgumentType
+                                    ++ " instead of expected: "
+                                    ++ show currentTarget
+                                    ++ "\nwe did find: "
+                                    ++ show cycledType
+                                    ++ " where we swapped on index "
+                                    ++ show indexFromBack
+                                    ++ "\n\n"
+                                ) -}
+
+                              try
+                                ( do
+                                    res@(_, finalType) <- processArguments $ reverse newArgsAndTypes
+                                    case finalType of -- if the result would be a function double check if swapping arguments is needed
+                                      TypeArrow _ _ -> try (argumentAtDifferentPlace cycledType) (return res)
+                                      _ -> return res
+                                )
+                                (argumentAtDifferentPlace cycledType)
+
+                            return ({- trace ("\n newExpr" ++ show (expr, indexFromBack, newExpr)) -} insertIntoExpressionAtIndex indexFromBack expr newExpr, typ)
                     -- fail $ "try swapping arguments" ++ show (buildTypeFromArguments cycledArguments returnType)
                     _ -> fail "not enough arguments to swap"
-             in try (processArguments $ reverse argsAndTypes) argumentAtDifferentPlace
+             in try
+                  ( do
+                      res@(_, finalType) <- processArguments $ reverse argsAndTypes
+                      case finalType of -- if the result would be a function double check if swapping arguments is needed
+                        TypeArrow _ _ -> try (argumentAtDifferentPlace typ) (return res)
+                        _ -> return res
+                  )
+                  (argumentAtDifferentPlace typ)
           (TokenInfo (Number num) _ start end) ->
             case mostGeneralUnifier (TypeCon TypeInt) goal of
               Nothing -> fail $ "Int does not match " ++ show goal
@@ -337,3 +412,29 @@ generateExpressionSuggestion goal =
                 applySubstitutionToSuggestionBuilder sub
                 return (WithSimplePos start end (Bool False), TypeCon TypeBool)
           _ -> generateExpressionSuggestion goal
+
+firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])
+firstMatchToFront foundType goals =
+  let go (x : xs) index =
+        case mostGeneralUnifier foundType x of
+          Just _ -> Just (index, x, xs)
+          Nothing -> do
+            (a, b, c) <- go xs (index - 1)
+            return (a, b, x : c)
+      go [] _ = Nothing
+   in do
+        (index, match, rest) <- go goals (length goals - 1)
+        return (index, match : rest)
+
+insertIntoExpressionAtIndex :: Int -> WithSimplePos Expr -> WithSimplePos Expr -> WithSimplePos Expr
+insertIntoExpressionAtIndex index expr@(WithSimplePos start end _) originalExpr =
+  case (index, originalExpr) of
+    (0, WithSimplePos startRest endRest _) -> WithSimplePos start endRest (Application originalExpr expr) -- TODO: figue out propper start and end positions
+    (_, WithSimplePos startRest endRest (Application exp1 expr2)) ->
+      WithSimplePos
+        startRest
+        endRest
+        (Application (insertIntoExpressionAtIndex (index - 1) expr exp1) expr2)
+    _ -> originalExpr
+
+-- TODO: add an error case here for when the originalexpr is not an application.Action

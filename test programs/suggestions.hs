@@ -4,8 +4,7 @@ abs :: Int -> Int
 
 val = 42
 
-fun = plus 
-        (plus 3 4 5
+fun = plus (plus 3 4 5
 
 fun2 = (plus 3) plus 4 5
 
@@ -13,7 +12,7 @@ fun3 = plus 3 (plus 4 5)
 
 fun4 x = x plus 5
 
-fun5 = plus 3 -- TODO: I am a comment2.
+fun5 = plus 3 -- I am a comment2.
     plus 6 5) 
 
 fun6 x = (plus x 
@@ -27,15 +26,33 @@ fun9 = plus plus 3 plus 4 5 plus 4) 5
 
 flipNum :: Bool -> Int -> Int
 
-fun10 :: Int
-fun10 = flipNum plus 4 25 True)
+
+
+fun10 = flipNum 25 True)
 
 fun11 :: Int
-fun11 = flipNum flipNum 6 True False)
+fun11 = flipNum  flipNum 6 True False)
 
 fun11b = flipNum flipNum 6 True False)
 
 
-longFunk 
+longFunk ::  Bool -> Int -> Int -> Bool -> Int
 
-fun12 = 
+fun12 :: Int
+fun12 = longFunk 25 4 False True)
+
+fun12b = longFunk 25 4 False True)
+
+
+
+
+fun13 :: Int
+fun13 = flipNum 4 True)
+
+fun13b = flipNum 4 True)
+
+apply f x = f x
+
+
+fun14 = apply plus 7) -- TODO: make sure the inferred type of this is correct.
+

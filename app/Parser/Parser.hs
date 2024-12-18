@@ -94,7 +94,8 @@ pSimpleType =
       pTypeBool = keepPos (\_ -> TypeCon TypeBool) <$> pString "Bool"
       pTypeList = keepPos (\_ -> TypeCon TypeList) <$> pString "List"
       pTypePair = keepPos (\_ -> TypeCon TypePair) <$> pString "Pair"
-   in pTypeInt <|> pTypeBool <|> pTypeList <|> pTypePair
+      pTypeChar = keepPos (\_ -> TypeCon TypeChar) <$> pString "Char"
+   in pTypeInt <|>pTypeChar <|> pTypeBool <|> pTypeList <|> pTypePair
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =

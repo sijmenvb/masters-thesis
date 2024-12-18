@@ -78,6 +78,7 @@ data TypeCon
   | TypeBool
   | TypeList
   | TypePair
+  | TypeChar
   deriving (Eq, Ord)
 
 instance Show TypeCon where
@@ -85,6 +86,7 @@ instance Show TypeCon where
   show TypeBool = "Bool"
   show TypeList = "List"
   show TypePair = "Pair"
+  show TypeChar = "Char"
 
 data Problem = Problem FunctionName String
   deriving (Show)

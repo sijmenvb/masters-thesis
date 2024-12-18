@@ -4,6 +4,7 @@ import Data.Either (partitionEithers)
 import Data.List (intersperse)
 import qualified Data.List as List
 import qualified Data.Map as Map
+import Debug.Trace
 import Lexer.LexerRunner
 import Lexer.Tokens (TokenInfo)
 import Parser.Parser
@@ -13,7 +14,6 @@ import Suggestions.Suggestions
 import Text.Megaparsec
 import TypeInference.TypeInference (MaybeError (..))
 import TypeInference.TypeInferenceUtil
-import Debug.Trace
 
 {-
 main :: IO ()
@@ -33,6 +33,7 @@ standardTypeEnv = Map.empty
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
+  --let fileName = "./test programs/presentationExamples.hs"
   let fileName = "./test programs/suggestions.hs"
   sourceString <- readFile fileName
   let maybeParsedTokens = runLexer sourceString
@@ -64,13 +65,15 @@ makeSuggestion :: Int -> TypeEnvironment -> ([TokenInfo], Problem) -> IO ()
 makeSuggestion state inferredTypes problembundle =
   let maybeErr = generateSuggestion state inferredTypes (fst problembundle)
    in case maybeErr of
-        Justt (expectedTokens, fixString, diffString, typ) ->
+        Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) ->
           sequence_ $
             -- print expectedTokens :
-            [ putStrLn fixString,
+            [ putStrLn "did you mean:",
+              putStrLn fixString,
               putStrLn "--diff:--",
               putStrLn diffString,
               putStrLn $ "--Which has type: " ++ show typ,
+              putStrLn $ "-Performance: branched " ++ show numberOfBranches ++ " times.",
               putStrLn "------------------------------------"
             ]
         Error str -> sequence_ [putStrLn $ "Problem generating suggestion for " ++ show (getNameFromProblem $ snd problembundle), putStrLn str, putStrLn "------------------------------------"]
