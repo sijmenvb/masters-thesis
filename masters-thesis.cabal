@@ -57,15 +57,9 @@ common warnings
 
 -- - Werror
 
-executable masters-thesis
-  -- Import common warning flags.
-  import:             warnings
-
-  -- .hs or .lhs file containing the Main module.
-  main-is:            Main.hs
-
-  --Modules included in this executable, other than Main.
-  other-modules:
+library
+  -- Modules to expose in the library.
+  exposed-modules:
     Parser.Parser
     Parser.ParserBase
     Parser.Types
@@ -78,11 +72,40 @@ executable masters-thesis
     Suggestions.Suggestions
     Suggestions.TokenDifference
 
+  -- Other library packages from which modules are imported.
+  build-depends:
+    , array        >=0.5.4.0
+    , base         
+    , mtl
+    , containers
+    , megaparsec
+    , rio          >=0.1.12.0
+    , text
+    , utf8-string  >=1
+    , ansi-terminal
+
+  -- Directories containing source files.
+  hs-source-dirs:     src
+
+  -- Base language.
+  default-language: Haskell2010
+
+executable masters-thesis
+  -- Import common warning flags.
+  import:             warnings
+
+  -- .hs or .lhs file containing the Main module.
+  main-is:            Main.hs
+
+  --Modules included in this executable, other than Main.
+
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
 
   -- Other library packages from which modules are imported.
   build-depends:
+    , masters-thesis
     , array        >=0.5.4.0
     , base         
     , mtl
@@ -99,3 +122,22 @@ executable masters-thesis
   -- Base language which the package is written in.
   default-language:   Haskell2010
   build-tool-depends: alex:alex >=3.2.6
+
+
+test-suite my-tests
+  type:           exitcode-stdio-1.0
+  main-is:        Main.hs
+  hs-source-dirs: tests
+  build-depends:  base >=4.14 && <5
+                  , array        >=0.5.4.0
+                  , base         
+                  , mtl
+                  , containers
+                  , megaparsec
+                  , rio          >=0.1.12.0
+                  , text
+                  , utf8-string  >=1
+                  , ansi-terminal
+                  , hspec       
+                  , masters-thesis
+  default-language: Haskell2010

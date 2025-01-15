@@ -13,7 +13,7 @@ import Parser.Types (Problem, Type, TypeEnvironment, getNameFromProblem)
 import Suggestions.Suggestions
 import Text.Megaparsec
 import TypeInference.TypeInference (MaybeError (..))
-import TypeInference.TypeInferenceUtil
+import TypeInference.TypeInferenceUtil ( inferTypeEnvironment )
 
 {-
 main :: IO ()
@@ -36,8 +36,7 @@ main = do
   --let fileName = "./test programs/presentationExamples.hs"
   let fileName = "./test programs/suggestions.hs"
   sourceString <- readFile fileName
-  let maybeParsedTokens = runLexer sourceString
-  case maybeParsedTokens of
+  case runLexer sourceString of
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
       let sections = sanitizeSections $ splitIntoSections parsedTokens
