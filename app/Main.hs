@@ -15,13 +15,6 @@ import Text.Megaparsec
 import TypeInference.TypeInference (MaybeError (..))
 import TypeInference.TypeInferenceUtil ( inferTypeEnvironment )
 
-{-
-main :: IO ()
-main = do
-  putStrLn "\n\n\n\n"
-  sourceString <- readFile "./test programs/simple.hs"
-  runAndPrettyPrintLexer sourceString
--}
 
 -- actually prints nextlines
 printList :: Show a => [a] -> IO ()
@@ -33,7 +26,6 @@ standardTypeEnv = Map.empty
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
-  --let fileName = "./test programs/presentationExamples.hs"
   let fileName = "./test programs/suggestions.hs"
   sourceString <- readFile fileName
   case runLexer sourceString of
@@ -65,8 +57,7 @@ makeSuggestion state inferredTypes problembundle =
   let maybeErr = generateSuggestion state inferredTypes (fst problembundle)
    in case maybeErr of
         Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) ->
-          sequence_ $
-            -- print expectedTokens :
+          sequence_ 
             [ putStrLn "did you mean:",
               putStrLn fixString,
               putStrLn "--diff:--",
