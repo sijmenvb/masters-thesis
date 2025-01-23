@@ -15,3 +15,4 @@ for the function `plus :: Int -> Int -> Int` and the expression `plus 4 5` gener
 [^1]:(we've taken a simplified view of the expression here, in actuality it is a proper `WithSimplePos Expr` )
 
 where we get the expression of each argument (which can be an application on it's own)
+

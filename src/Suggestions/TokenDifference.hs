@@ -72,34 +72,8 @@ instance Show ExtendedTokens where
   show (Optional token num) =
     grayColor ++ show token ++ show num ++ resetColor
 
-{- modifyTokenString :: WithSimplePos Expr -> State [TokenInfo] [Action TokenInfo]
-modifyTokenString expr =
-  let require :: Token -> State [TokenInfo] [Action TokenInfo]
-      require tok = do
-        tokens <- get
-        case tokens of
-          [] -> return [Add $ TokenInfo tok Data.Text.empty (-1, -1) (-1, -1)]
-          (input@(TokenInfo inTok _ _ _) : xs) | tok == inTok -> do
-            put xs
-            return [ Keep input]
-          (input@(TokenInfo inTok text start end) : xs) -> return $ Add $ TokenInfo tok text start end
-
-      getNextTok :: State [TokenInfo] (Maybe TokenInfo)
-      getNextTok = do
-        tokens <- Control.Monad.State.get
-        case tokens of
-          (x : xs) -> return $ Just x
-          _ -> return Nothing
-   in case expr of
-        (WithSimplePos start end (Parentheses expr)) -> do
-          tok <- getNextTok
-          lPar <- require Lpar
-          exprToks <- modifyTokenString expr
-          rPar <- require Rpar
-          return $ lPar ++ exprToks ++ rPar -}
-
-testfunc :: Section -> ([ExtendedTokens], Int)
-testfunc sect = runState (createTargetTokensFromSection sect) 0
+sectionToSuggestion :: Section -> ([ExtendedTokens], Int)
+sectionToSuggestion sect = runState (createTargetTokensFromSection sect) 0
 
 createTargetTokensFromSection :: Section -> State Int [ExtendedTokens]
 createTargetTokensFromSection section =
@@ -151,7 +125,7 @@ needsParentheses expr =
     LambdaAbstraction _ _ -> True
     _ -> False
 
--- TODO: use dynamic programming approach since this is unbearably slow.
+
 generateActions :: [ExtendedTokens] -> [Token] -> [Action Token]
 generateActions extTokensIn tokensIn =
   -- generateActions2 is heavily inspired by Levenshtein distance, probably not very efficient

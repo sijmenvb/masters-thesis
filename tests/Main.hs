@@ -24,12 +24,27 @@ trim = f . f
 
 main :: IO ()
 main = hspec $ do
-  describe "Example Test" $ do
+  describe "code suggestions" $ do
     it "removing extra parenthesis from simple addition" $ do
-      runSuggestion "fun = plus 2 4)" `shouldBe` "fun = plus 2 4"
+      runSuggestion "fun = plus 2 4)" `shouldBe` "fun = plus 2 4 , Int"
+
+    it "respect unnecessary brackets" $ do
+      runSuggestion "fun = (plus 2) 4)" `shouldBe` "fun = (plus 2) 4 , Int"
 
     it "brackets for partial application if required" $ do
-      runSuggestion "fun = trice plus 2 4)" `shouldBe` "fun = trice (plus 2) 4"
+      runSuggestion "fun = trice plus 2 4)" `shouldBe` "fun = trice (plus 2) 4 , Int"
+
+    it "swap arguments" $ do
+      runSuggestion "fun = invertNum 4 True" `shouldBe` "fun = invertNum True 4 , Int"
+    
+    it "nested brackets" $ do
+      runSuggestion "fun = plus plus plus 4 5 plus plus plus 2 3 4 5 6" `shouldBe` "fun = plus (plus (plus 4 5) (plus (plus (plus 2 3) 4) 5)) 6 , Int"
+    
+    it "suggestion for partial application" $ do
+      runSuggestion "fun = plus plus 4 4 " `shouldBe` "fun = plus (plus 4 4) , (Int -> Int)"
+    
+    it "swapping twice" $ do
+      runSuggestion "fun = invertNum invertNum 6 True False" `shouldBe` "fun = invertNum False (invertNum True 6) , Int"
 
 
 
@@ -39,6 +54,8 @@ standardTypesAsString =
     "\n"
     [ "plus :: Int -> Int -> Int",
       "trice f x = f (f (f x))",
+      "invertNum :: Bool -> Int -> Int",
+
       "\n" -- do not remove the \n this should remain last in the list
     ]
 
@@ -61,5 +78,5 @@ makeSuggestion :: Int -> TypeEnvironment -> ([TokenInfo], Problem) -> String
 makeSuggestion state inferredTypes problembundle =
   let maybeErr = generateSuggestion state inferredTypes (fst problembundle)
    in case maybeErr of
-        Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) -> fixString
+        Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) -> fixString ++ ", " ++ show typ
         Error str -> concat ["Problem generating suggestion for " ++ show (getNameFromProblem $ snd problembundle), str, "------------------------------------"]
