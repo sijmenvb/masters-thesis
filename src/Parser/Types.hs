@@ -23,6 +23,16 @@ data Expr
 buildApplication :: WithSimplePos Expr -> WithSimplePos Expr -> WithSimplePos Expr
 buildApplication expr1@(WithSimplePos start _ _) expr2@(WithSimplePos _ end _) = WithSimplePos start end $ Application expr1 expr2
 
+expressionToArguments :: WithSimplePos Expr -> (WithSimplePos Expr, [WithSimplePos Expr])
+expressionToArguments =
+  let go acc exprWithPos@(WithSimplePos start end expr) =
+        case expr of
+          Application expr1 arg -> let (fun, args) = go (arg : acc) expr1 in (fun, args)
+          _ -> (exprWithPos, acc)
+   in go []
+
+buildExpressionFromArguments :: WithSimplePos Expr -> [WithSimplePos Expr] ->  WithSimplePos Expr
+buildExpressionFromArguments = foldl buildApplication
 -- instance Show Expr generated with chatgpt.
 instance Show Expr where
   show (Parentheses expr) = "( " ++ show expr ++ " )"

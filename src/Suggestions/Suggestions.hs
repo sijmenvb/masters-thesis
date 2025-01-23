@@ -19,7 +19,7 @@ import GHC.Base (TyCon (TyCon))
 import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOriginalShow, showTokenInfoWithPosition)
 import Parser.ParserBase
 import Parser.Types
-import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, testfunc)
+import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
 import Text.Megaparsec (ParseErrorBundle, between, errorBundlePretty)
 import TypeInference.TypeInference
   ( Errorable (..),
@@ -71,8 +71,10 @@ dropTypeArguments arguments typeEnv typ =
     ((WithSimplePos _ _ identifier) : xs, TypeArrow a b) -> dropTypeArguments xs (Map.insert identifier a typeEnv) b
     ((WithSimplePos _ _ identifier) : xs, _) -> Error $ "Cannot take an argument from the type " ++ show typ ++ " to assign to " ++ show identifier ++ "!"
 
--- TODO: make note about this
-generateSuggestion :: Int -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)
+type FreshVariableCounter = Int
+
+-- See Note [Suggestions/Suggestions/generateSuggestion]
+generateSuggestion :: FreshVariableCounter -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)
 generateSuggestion state typeEnv tokens =
   let functionName = getSectionName tokens
       getArguments :: [TokenInfo] -> [WithSimplePos LabelIdentifier]
@@ -83,7 +85,7 @@ generateSuggestion state typeEnv tokens =
         _ -> []
 
       arguments :: [WithSimplePos LabelIdentifier]
-      arguments = getArguments (tail tokens)
+      arguments = getArguments (tail tokens) --TODO: make sure this errors instead of crashing
 
       argumentTypeVars :: TypeEnvironment
       argumentTypeVars =
@@ -115,7 +117,7 @@ generateSuggestion state typeEnv tokens =
         (suggestions, builderState) <- runSugesstionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
         (expr, typ, _) <- liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
         let section = FunctionDefinition functionName arguments expr
-        let (expectedTokens, _) = testfunc section
+        let (expectedTokens, _) = sectionToSuggestion section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
         let actionTokens = generateActions expectedTokens tokenList
         finalType <- buildReturnType (getEnvironmentFromState builderState) arguments typ
@@ -317,7 +319,7 @@ findFirstMatch goal ((canExpr, canTyp, canState) : list) = case mostGeneralUnifi
   Nothing -> findFirstMatch goal list
   Just substitution -> Just (canExpr, applySubstitution substitution canTyp, canState)
 
-
+-- takes a target type, a maybe in case  we are currently building a function and a list of the candidates found thus far.
 generateExpressionSuggestion :: Type -> Maybe Type -> [Candidate] -> SuggestionBuilder [Candidate]
 generateExpressionSuggestion goal currentProcessType accumulator =
   let getExpr :: Type -> SuggestionBuilder Candidate
@@ -375,11 +377,12 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   (TypeArrow _ _) -> do
                     newAccumulator <- addToAccumulator accumulator goal nextArg
                     generateExpressionSuggestion goal (Just nextArgType) newAccumulator
+                  -- TODO: filter on matching the goal here???
                   _ -> addToAccumulator accumulator goal nextArg
             )
             (return accumulator)
         Just functionType@(TypeArrow argTyp retTyp) ->
-          let (previousExpr, _, _) : _ = accumulator -- will never be an empty list.
+          let (previousExpr, _, _) : _ = accumulator -- will never be an empty list. This is the reason we must be able to return candidates that do not match the goal (yet).
               plugInArgument :: [(WithSimplePos Expr, Type, SuggestionBuilderState)] -> SuggestionBuilder [Candidate]
               plugInArgument candidates = case candidates of
                 (expr, nextArgType, state) : xs -> do
@@ -388,7 +391,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   case mostGeneralUnifier nextArgType argTyp of
                     Nothing ->
                       -- if the greedy version doesn't fit try the slightly less greedy result.
-                      trace (show nextArgType ++ " doesn't fit") $ plugInArgument xs
+                      plugInArgument xs
                     Just sub ->
                       try
                         ( do
@@ -396,9 +399,11 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                             let retTypWithSub = applySubstitution sub retTyp
                             currentState <- getSuggestionBuilderState
                             newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
-                            generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
+                            res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
+                            trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res)) return res
                         )
-                        ( plugInArgument xs
+                        ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
+                          plugInArgument xs
                         )
                 _ ->
                   -- no arguments fit
@@ -411,19 +416,25 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   case typeToArguments functionType of
                     (typeArguments, returnType) ->
                       case firstMatchToFront nextArgType typeArguments of
-                        Nothing -> swapArguments xs --see if a partial application fits
-                        Just (indexFromBack, fittingArgumentsSequence) -> do
-                          let cycledType = buildTypeFromArguments (drop 1 fittingArgumentsSequence) returnType
-                          newArgsAndTypes <- generateExpressionSuggestion goal (Just cycledType) accumulator
-                          
+                        Nothing -> swapArguments xs -- see if a partial application fits
+                        Just (foundIndex, fittingArgumentsSequence) -> do
+                          let reorderedType = buildTypeFromArguments (tail fittingArgumentsSequence) returnType
+                          newArgsAndTypes <- generateExpressionSuggestion goal (Just reorderedType) accumulator
+
+                          -- The foundIndex needs to be adjusted to also incorporate the number of arguments we have already given at this point
+                          -- firstMatchToFront only looks at the current function type, not the whole. (it needs to look art just the remainder to avoid swapping to the same type twice)
+                          -- see Note [Suggestions/Suggestions/note on indexing for swapping]
+                          let (previousExpr, _, _) : _ = accumulator -- will never be an empty list.
+                          let currentIndex = length (snd (expressionToArguments previousExpr))
+                          let insertionIndex = currentIndex + foundIndex
 
                           let result =
                                 mapMaybe
                                   ( \(expr, typ, state) -> do
-                                      newExpr <- insertIntoExpressionAtIndex indexFromBack foundExpr expr
+                                      newExpr <- insertIntoExpressionAtIndex insertionIndex foundExpr expr
                                       return (newExpr, typ, state)
                                   )
-                                  newArgsAndTypes
+                                  (take (length newArgsAndTypes - length accumulator) newArgsAndTypes) -- we take to make sure we only insert on new suggestions
                           return $ result ++ accumulator
                 _ ->
                   -- no arguments fit
@@ -440,34 +451,34 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                           nextArgumentCandidates <- generateExpressionSuggestion freshVar Nothing []
                           swapArguments nextArgumentCandidates
                       )
-                      (return accumulator) -- TODO: try putting the arguments at a different place.
+                      (return accumulator) 
                   )
         Just _ -> return accumulator
 
+-- moves the first match with the first argument to the front, reordering the list. and giving the index to undo the swapping later
 firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])
 firstMatchToFront foundType goals =
   let go (x : xs) index =
         case mostGeneralUnifier foundType x of
           Just _ -> Just (index, x, xs)
           Nothing -> do
-            (a, b, c) <- go xs (index - 1)
+            (a, b, c) <- go xs (index + 1)
             return (a, b, x : c)
       go [] _ = Nothing
    in do
-        (index, match, rest) <- go goals (length goals - 1)
+        (index, match, rest) <- go goals 0
         return (index, match : rest)
 
 insertIntoExpressionAtIndex :: Int -> WithSimplePos Expr -> WithSimplePos Expr -> Maybe (WithSimplePos Expr)
-insertIntoExpressionAtIndex index expr@(WithSimplePos start end _) originalExpr =
-  case (index, originalExpr) of
-    (0, WithSimplePos startRest endRest _) -> Just $ WithSimplePos start endRest (Application originalExpr expr) -- TODO: figue out propper start and end positions
-    (_, WithSimplePos startRest endRest (Application exp1 expr2)) -> do
-      rest <- insertIntoExpressionAtIndex (index - 1) expr exp1
-      return $
-        WithSimplePos
-          startRest
-          endRest
-          (Application rest expr2)
-    _ -> Nothing
-
--- TODO: add an error case here for when the originalexpr is not an application.Action
+insertIntoExpressionAtIndex indexIn expr originalExpr =
+  let (function, arguments) = expressionToArguments originalExpr
+      insertAtPos :: Int -> a -> [a] -> Maybe [a]
+      insertAtPos 0 element list = Just (element : list)
+      insertAtPos index element (x : list) =
+        do
+          result <- insertAtPos (index - 1) element list
+          return (x : result)
+      insertAtPos _ _ _ = Nothing
+   in do
+        newArguments <- insertAtPos indexIn expr arguments
+        return $ buildExpressionFromArguments function newArguments

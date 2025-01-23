@@ -13,3 +13,14 @@ Note [folder/file]
 ~~~~~~~~~~~~~~~~~~
 ```
 so one can easily check they are at the right note.
+
+optionally you can also add a header to the path:
+`-- See Note [folder/file/header]`
+we use this to refer to a specific place in the note.
+
+# stuff i will forget:
+## run tests and program
+`cabal test && time cabal run`
+
+## table of contents in markdown
+`ctrl + shift + p` then Markdown All in One: Create Table of Contents.
