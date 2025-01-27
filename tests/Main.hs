@@ -24,7 +24,7 @@ trim = f . f
 
 main :: IO ()
 main = hspec $ do
-  describe "code suggestions" $ do
+  describe "basic code suggestions" $ do
     it "removing extra parenthesis from simple addition" $ do
       runSuggestion "fun = plus 2 4)" `shouldBe` "fun = plus 2 4 , Int"
 
@@ -45,6 +45,26 @@ main = hspec $ do
     
     it "swapping twice" $ do
       runSuggestion "fun = invertNum invertNum 6 True False" `shouldBe` "fun = invertNum False (invertNum True 6) , Int"
+
+  describe "lambda expressions code suggestions" $ do
+    it "basic lambda parenthesis " $ do
+      runSuggestion "fun = \\x -> plus x x)" `shouldBe` "fun = (\\x -> plus x x) , (Int -> Int)"
+    
+    it "basic lambda applied " $ do
+      runSuggestion "fun = \\x -> plus x x 5" `shouldBe` "fun = (\\x -> plus x x) 5 , Int"
+
+    it "multiple input lambda  " $ do
+      runSuggestion "fun = \\x y -> plus x y) 5" `shouldBe` "fun = (\\x y -> plus x y) 5 , (Int -> Int)"
+
+    it "respect subdividing lambda" $ do
+      runSuggestion "fun = \\x -> (\\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+   
+    it "no brackets at all" $ do
+      runSuggestion "fun = \\x -> \\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+    
+    
+    it "lambda as argument " $ do
+      runSuggestion "fun = trice \\x -> plus x x 5" `shouldBe` "fun = trice (\\x -> plus x x) 5 , Int"
 
 
 

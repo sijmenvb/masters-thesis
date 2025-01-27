@@ -68,6 +68,10 @@ liftTokenInfo tok@TokenInfo {start_pos = (lineBegin, columnBegin), end_pos = (li
   let nonZero = max 1 -- megaparsec has 1 as the first position not 0, no idea why it works for all other values...
    in WithPos (SourcePos "" (mkPos $ nonZero lineBegin) (mkPos $ nonZero columnBegin)) (SourcePos "" (mkPos $ nonZero lineEnd) (mkPos $ nonZero columnEnd)) (Data.Text.length str) tok
 
+liftTokenInfoToSimplePos :: TokenInfo -> WithSimplePos Tokens.Token
+liftTokenInfoToSimplePos TokenInfo {start_pos = start, end_pos = end, token_type = tok} =
+  WithSimplePos start end tok
+
 instance Stream MyStream where
   type Token MyStream = WithPos TokenInfo
   type Tokens MyStream = [WithPos TokenInfo]

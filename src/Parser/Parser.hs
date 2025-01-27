@@ -148,7 +148,7 @@ pExpr =
 
 
 
-buildLambdaExpression ::  (Int,Int) -> [WithSimplePos Lexer.Tokens.Token] -> WithSimplePos Expr -> Parser (WithSimplePos Expr)
+buildLambdaExpression ::  MonadFail m  => (Int, Int) -> [WithSimplePos Lexer.Tokens.Token] -> WithSimplePos Expr -> m (WithSimplePos Expr)
 buildLambdaExpression start [] expr@(WithSimplePos _ end _) = fail "internal buildLambdaExpression can never get an empty list"
 buildLambdaExpression start [WithSimplePos _ _ (Name labelName)] expr@(WithSimplePos _ end _) = return (WithSimplePos start end $ LambdaAbstraction labelName expr)
 buildLambdaExpression start (WithSimplePos _ _ (Name labelName) : rest@(WithSimplePos newStart _ _ : xs)) expr@(WithSimplePos _ end _) = do
