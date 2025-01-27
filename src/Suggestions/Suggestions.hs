@@ -1,11 +1,12 @@
 {-# LANGUAGE InstanceSigs #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 {-# HLINT ignore "Use tuple-section" #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# HLINT ignore "Replace case with fromMaybe" #-}
 {-# HLINT ignore "Use lambda-case" #-}
 {-# HLINT ignore "Use const" #-}
+{-# OPTIONS_GHC -Wno-overlapping-patterns #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 module Suggestions.Suggestions where
 
 import Data.Foldable
@@ -20,7 +21,7 @@ import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOrig
 import Parser.ParserBase
 import Parser.Types
 import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
-import Text.Megaparsec (ParseErrorBundle, between, errorBundlePretty)
+import Text.Megaparsec (ParseErrorBundle, Stream (Token), between, errorBundlePretty)
 import TypeInference.TypeInference
   ( Errorable (..),
     FailMessage (..),
@@ -30,6 +31,7 @@ import TypeInference.TypeInference
     applySubstitutionToTypeEnvironment,
     mostGeneralUnifier,
   )
+import Parser.Parser (buildLambdaExpression)
 
 indexedMap :: (Int -> a -> b) -> [a] -> [b]
 indexedMap f xs = zipWith f [0 ..] xs
@@ -85,8 +87,7 @@ generateSuggestion state typeEnv tokens =
         _ -> []
 
       arguments :: [WithSimplePos LabelIdentifier]
-      arguments = getArguments (tail tokens) --TODO: make sure this errors instead of crashing
-
+      arguments = getArguments (tail tokens) -- TODO: make sure this errors instead of crashing
       argumentTypeVars :: TypeEnvironment
       argumentTypeVars =
         case Map.lookup functionName typeEnv of
@@ -354,6 +355,24 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   applySubstitutionToSuggestionBuilder sub
                   currentState <- getSuggestionBuilderState
                   return (WithSimplePos start end (Bool False), TypeCon TypeBool, currentState)
+            (TokenInfo Lambda _ start end) -> do
+              -- TODO: make less generic version if there is a goal.
+              currentTypeEnv <- getTypeEnvironment
+              arguments <- getArgumentsFromTokens (-1)
+              consumeTokenIfExists RArrow
+              addArgumentsToTypeEnvironment arguments
+              freshVarGoal <- getFreshVar
+              candidates <- generateExpressionSuggestion freshVarGoal Nothing []
+              case candidates of
+                [] -> fail "could not generate an expression for this lambda"
+                (expr, typ, _) : rest -> do
+                  finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
+                  newTypeEnv <- getTypeEnvironment
+                  let typeArguments = mapMaybe (\(TokenInfo (Name name) _ start end) -> Map.lookup name newTypeEnv) arguments
+                  let finalType = buildTypeFromArguments typeArguments typ
+                  setTypeEnvironment currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                  currentState <- getSuggestionBuilderState
+                  return (finalExpr, finalType, currentState) --TODO: built correct type,
             _ -> getExpr goal
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
@@ -451,9 +470,47 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                           nextArgumentCandidates <- generateExpressionSuggestion freshVar Nothing []
                           swapArguments nextArgumentCandidates
                       )
-                      (return accumulator) 
+                      (return accumulator)
                   )
         Just _ -> return accumulator
+
+
+getArgumentsFromTokens :: Int -> SuggestionBuilder [TokenInfo]
+getArgumentsFromTokens 0 = return []
+getArgumentsFromTokens limit = do
+  currentState <- getSuggestionBuilderState
+  token <- popToken
+  case token of
+    (TokenInfo (Name name) _ start end) -> do
+      list <- getArgumentsFromTokens (limit - 1)
+      return $ token : list
+    _ -> do
+      setSuggestionBuilderState currentState -- un-consume the token
+      return []
+
+consumeTokenIfExists :: Lexer.Tokens.Token -> SuggestionBuilder ()
+consumeTokenIfExists target = do
+  currentState <- getSuggestionBuilderState
+  token <- popToken
+  case token of
+    (TokenInfo foundToken _ _ _) | foundToken == target -> return ()
+    _ ->
+      do
+        setSuggestionBuilderState currentState -- un-consume the token
+        return ()
+
+addArgumentsToTypeEnvironment :: [TokenInfo] -> SuggestionBuilder ()
+addArgumentsToTypeEnvironment [] = return ()
+addArgumentsToTypeEnvironment (x : xs) = do
+  addLabelToTypeEnvironmentAsFreshVar x
+  addArgumentsToTypeEnvironment xs
+
+addLabelToTypeEnvironmentAsFreshVar :: TokenInfo -> SuggestionBuilder ()
+addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = do
+  typeEnv <- getTypeEnvironment
+  freshVar <- getFreshVar
+  setTypeEnvironment $ Map.insert name freshVar typeEnv
+addLabelToTypeEnvironmentAsFreshVar _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
 
 -- moves the first match with the first argument to the front, reordering the list. and giving the index to undo the swapping later
 firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])
