@@ -62,9 +62,22 @@ main = hspec $ do
     it "no brackets at all" $ do
       runSuggestion "fun = \\x -> \\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
     
-    
     it "lambda as argument " $ do
       runSuggestion "fun = trice \\x -> plus x x 5" `shouldBe` "fun = trice (\\x -> plus x x) 5 , Int"
+    
+    it "nested lambda " $ do
+      runSuggestion "fun = trice \\x -> trice \\y -> plus y y x 5" `shouldBe` "fun = trice (\\x -> trice (\\y -> plus y y) x) 5 , Int"
+
+    it " = instead of -> " $ do
+      runSuggestion "fun = trice \\x = plus 5 x 8)" `shouldBe` "fun = trice (\\x -> plus 5 x) 8 , Int"
+
+    it "missing -> with set goal " $ do
+      runSuggestion "fun = iterate \\x plus 5 x 8 2" `shouldBe` "fun = iterate (\\x -> plus 5 x) 8 2 , Int"
+      
+    it "swap with set goal " $ do
+      runSuggestion "fun = iterate \\x invertNum x True 8 2" `shouldBe` "fun = iterate (\\x -> invertNum True x) 8 2 , Int"
+    
+
 
 
 
@@ -75,6 +88,7 @@ standardTypesAsString =
     [ "plus :: Int -> Int -> Int",
       "trice f x = f (f (f x))",
       "invertNum :: Bool -> Int -> Int",
+      "iterate :: (Int -> Int) -> Int -> (Int -> Int)",
 
       "\n" -- do not remove the \n this should remain last in the list
     ]

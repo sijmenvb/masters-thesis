@@ -64,6 +64,7 @@ data Type
   -- TODO: add type applications
   deriving (Eq, Ord)
 
+-- splits a type into a list of arguments and a return type
 typeToArguments :: Type -> ([Type], Type)
 typeToArguments typ =
   case typ of

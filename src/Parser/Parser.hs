@@ -90,12 +90,13 @@ pType = do
 
 pSimpleType :: Parser (WithSimplePos Type)
 pSimpleType =
-  let pTypeInt = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
+  let pTypeParentheses = pToken Lpar *> pWhiteSpace *> pType <* pWhiteSpace <* pToken Rpar 
+      pTypeInt = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
       pTypeBool = keepPos (\_ -> TypeCon TypeBool) <$> pString "Bool"
       pTypeList = keepPos (\_ -> TypeCon TypeList) <$> pString "List"
       pTypePair = keepPos (\_ -> TypeCon TypePair) <$> pString "Pair"
       pTypeChar = keepPos (\_ -> TypeCon TypeChar) <$> pString "Char"
-   in pTypeInt <|>pTypeChar <|> pTypeBool <|> pTypeList <|> pTypePair
+   in pTypeParentheses <|> pTypeInt <|>pTypeChar <|> pTypeBool <|> pTypeList <|> pTypePair
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
