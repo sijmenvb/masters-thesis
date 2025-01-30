@@ -8,6 +8,17 @@
       - [note on indexing for swapping](#note-on-indexing-for-swapping)
       - [example with tree swaps:](#example-with-tree-swaps)
     - [addToAccumulator](#addtoaccumulator)
+    - [lambda expression suggestions](#lambda-expression-suggestions)
+      - [In detail:](#in-detail)
+        - [get the current type environment](#get-the-current-type-environment)
+        - [getting the arguments](#getting-the-arguments)
+        - [consuming the -\>](#consuming-the--)
+        - [adding arguments to the type environment](#adding-arguments-to-the-type-environment)
+        - [generating the expression in the lambda](#generating-the-expression-in-the-lambda)
+        - [building the type of the lambda expression](#building-the-type-of-the-lambda-expression)
+        - [building the lambda expression](#building-the-lambda-expression)
+        - [reverting the type environment](#reverting-the-type-environment)
+        - [constructing the candidate](#constructing-the-candidate)
 - [Token Difference](#token-difference)
   - [types to token streams](#types-to-token-streams)
   - [generating the differences](#generating-the-differences)
@@ -25,8 +36,8 @@ in short suggestions are generated as follows.
 is responsible for generating suggestions for function definitions. 
 it takes:
 - the current state for fresh variables.
-- a type enviornment
-- a tokenstream
+- a type environment
+- a token stream
 
 It produces either an error or a collection of
 - a list of expected tokens.
@@ -39,7 +50,7 @@ To do this we first split on the first `=` sign and peel off the function name. 
 
 If the function we are trying to make a suggestion for has a type we assign the arguments the corresponding types and put those in the type environment. if there is no type we assign them free variables.
 
-we take this type environment and use it to build a suggestionbuilder. 
+we take this type environment and use it to build a suggestionBuilder. 
 we call `generateExpressionSuggestion` with the goal either a free variable or (If the function we are trying to make a suggestion for has a type) we give the type of the function subtracting all the types of the arguments. 
 
 Here we still support functions like `myFun :: Int -> Int -> Int` where we only have `myFun x = ...` here the goal will simply be `Int -> Int` as only one argument is given in the function definition.
@@ -121,7 +132,7 @@ if there is no match anywhere we just try the next candidate.
 If there is a match in any of the arguments we get the arguments reordered where the first match is now in the front. We also get the index which we'll use later to undo this swapping. 
 we will hold this candidate for a while. Then we generate an expression as normal as if the currentProcessType is this new "reorderedType" type where we can just take off the first argument as we just saw that this fits. 
 example for thus far:
-for `stringRepeat "hello " 5` we see that we find a `"hello "::String` but that doesn't fit in `stringRepeat:: Int -> String -> String` we do see that if the arguments were `String -> Int -> String` it would fit. because we are going to hold `"hello "::String` to the side for a bit we continue generating as if we have just parsed `stringRepeat :: Int -> String` with the remainign input `5`. this will generate the following candidates:
+for `stringRepeat "hello " 5` we see that we find a `"hello "::String` but that doesn't fit in `stringRepeat:: Int -> String -> String` we do see that if the arguments were `String -> Int -> String` it would fit. because we are going to hold `"hello "::String` to the side for a bit we continue generating as if we have just parsed `stringRepeat :: Int -> String` with the remaining input `5`. this will generate the following candidates:
 ```hs
 [ (stringRepeat 5 , String                  , state)
 , (stringRepeat   , Int -> String -> String , state)
@@ -130,7 +141,7 @@ for `stringRepeat "hello " 5` we see that we find a `"hello "::String` but that 
 now we do need to put the candidate we've been holding onto back into the type. 
 We use the `insertIntoExpressionAtIndex :: Int -> WithSimplePos Expr -> WithSimplePos Expr -> Maybe (WithSimplePos Expr)` for that.
 we can give it the index and if the generated expression is big enough for the candidate we've been holding to be inserted it will insert it. otherwise we get nothing.
-in our example transfor the candidates from above into:
+in our example transform the candidates from above into:
 ```hs
 [ (stringRepeat 5 "hello ", String          , state)
 ]
@@ -200,6 +211,67 @@ It will revert the state of the suggestion builder to before this substitution s
 <!-- TODO: add good example --> 
 
 performance: maybe only if the function could end up in the goal instead of always.
+
+### lambda expression suggestions
+Lambda expressions are generated similarly to [`generateSuggestion`](#generatesuggestion). When we call the internal `getExpr` and find a lambda `\` we try to generate a lambda expression.
+
+In short it works as follows:
+1. get the current type environment to revert to later
+2. get the tokens that represent the arguments
+3. add the tokens to the type environment
+4. generate an expression (and type) with this new environment
+5. read the types from the arguments from the now updated type environment
+6. use the generated expression and type with the arguments and their types to build up a return type and lambda expression that form a candidate.
+7. revert the type environment
+
+#### In detail:
+##### get the current type environment
+we first get the current type environment. A change in the type environment within a lambda has no effect outside said lambda. So we need to store the current type environment to revert to it later.
+##### getting the arguments
+We first look at the goal. This is done since we can make better informed decisions when the type of the lambda is known. for example if we know the type should be `Int -> Int -> Int` we know the lambda can take at most two arguments.
+Note: if the type is known to be `Int -> Int -> a` it can still have an arbitrary number of arguments since `a` can be a function itself. also, if the type is `Int -> Int -> Int` we can also take fewer than two arguments. for example look at `(\x -> plus x)` which is a lambda of type `Int -> Int -> Int` that only takes one argument in the lambda definition.
+
+If we know the type and it does not end in a variable we can stop taking arguments whenever we've reached the number of arguments. So if we know the desired type is e.g. `Int -> Int -> Int` and the given expression is 
+```hs 
+(\x y plus x y)
+```
+
+then we know that after the `y` we have consumed the two arguments and can go on to consume a `->`. 
+##### consuming the ->
+in the example above the `->` is missing. so we only consume the `->` if it exists if it does not we just assume the programmer missed it. 
+
+we also stop taking arguments as soon as we encounter something that is not a label this means we stop taking arguments as soon as we see a `->` but also if we see a `=` or some other symbol. Sine we still only try to consume the `->` if there is some other symbol instead we still assume the `->`. and since our building of suggestions ignores unknown tokens it will suggest to remove "other symbol" instead. 
+##### adding arguments to the type environment
+the expression after the `->` within a lambda can use the arguments of the lambda so they need to be added to teh type environment. 
+the arguments can be assigned to free variables. However, we can (sometimes) do better. If we know the goal we already know what the types of the arguments should be. Giving this information helps if there are other mistakes in the lambda like arguments that should be swapped.
+
+to do this we use `addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type]` it takes the type-arguments for the goal and the arguments as tokens and adds them to the type environment if we run out of type arguments we use free variables. It also returns the Types that were not used.
+##### generating the expression in the lambda
+we use the normal way of calling `generateExpressionSuggestion` for the goal we can combine the unused arguments and the return type of the goal
+
+note: if there "is no goal" the goal will be a free variable. which is also the `goalReturnType`.
+
+This will generate a list of candidates for the body of the lambda.
+##### building the type of the lambda expression
+we can build the type of the complete lambda if we know the type of the arguments and the type of the expression. 
+
+we can het the types by looking the arguments up using the (now updated) type environment. 
+
+then we can use the `buildTypeFromArguments` to construct the final type
+
+We do this for each candidate expression generated and we'll continue with the first one that fits the goal. (starting with the most greedy version)
+
+##### building the lambda expression
+we can reuse the `buildLambdaExpression` to build the lambda from the arguments and generated expression. we also need to add the start position of the lambda. 
+
+note that lambdas like `(\x y -> 4)` are interpreted as `(\x -> (\y -> 4))` internally
+
+
+##### reverting the type environment
+since we now have the lambda expression and it's type we can make sure we revert the type environment.
+
+##### constructing the candidate
+to finish up we take the current state (now with the old type environment) the lamda and its type to construct the candidate required.
 
 # Token Difference
 The tokenDifference module is responsible for converting build in types to token streams that could be used to generate them. 

@@ -90,12 +90,13 @@ pType = do
 
 pSimpleType :: Parser (WithSimplePos Type)
 pSimpleType =
-  let pTypeInt = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
+  let pTypeParentheses = pToken Lpar *> pWhiteSpace *> pType <* pWhiteSpace <* pToken Rpar 
+      pTypeInt = keepPos (\_ -> TypeCon TypeInt) <$> pString "Int"
       pTypeBool = keepPos (\_ -> TypeCon TypeBool) <$> pString "Bool"
       pTypeList = keepPos (\_ -> TypeCon TypeList) <$> pString "List"
       pTypePair = keepPos (\_ -> TypeCon TypePair) <$> pString "Pair"
       pTypeChar = keepPos (\_ -> TypeCon TypeChar) <$> pString "Char"
-   in pTypeInt <|>pTypeChar <|> pTypeBool <|> pTypeList <|> pTypePair
+   in pTypeParentheses <|> pTypeInt <|>pTypeChar <|> pTypeBool <|> pTypeList <|> pTypePair
 
 pExpr :: Parser (WithSimplePos Expr)
 pExpr =
@@ -118,13 +119,13 @@ pExpr =
       pLambda = do
         WithSimplePos start _ _ <- pToken Lambda
         pWhiteSpace
-        WithSimplePos _ _ (Name labelName) <- pName
+        arguments <- some pName
         pWhiteSpace
         _ <- pToken RArrow
         pWhiteSpace
-        expr@(WithSimplePos _ end _) <- pExpr
+        expr <- pExpr
         pWhiteSpace
-        return $ WithSimplePos start end $ LambdaAbstraction labelName expr
+        buildLambdaExpression start arguments expr 
       pLetExpr = do
         WithSimplePos start _ _ <- pToken Let
         pWhiteSpace
@@ -145,3 +146,12 @@ pExpr =
       applicationFold (firstItem : rest) = foldl' buildApplication firstItem rest
       applicationFold _ = error "unreachable state, some should guarantee at least one item in the list."
    in applicationFold <$> some (pParentheses <|> pBool <|> pExprInt <|> pLabel <|> pLambda <|> pLetExpr)
+
+
+
+buildLambdaExpression ::  MonadFail m  => (Int, Int) -> [WithSimplePos Lexer.Tokens.Token] -> WithSimplePos Expr -> m (WithSimplePos Expr)
+buildLambdaExpression start [] expr@(WithSimplePos _ end _) = fail "internal buildLambdaExpression can never get an empty list"
+buildLambdaExpression start [WithSimplePos _ _ (Name labelName)] expr@(WithSimplePos _ end _) = return (WithSimplePos start end $ LambdaAbstraction labelName expr)
+buildLambdaExpression start (WithSimplePos _ _ (Name labelName) : rest@(WithSimplePos newStart _ _ : xs)) expr@(WithSimplePos _ end _) = do
+  finalExpr <- buildLambdaExpression newStart rest expr
+  return (WithSimplePos start end $ LambdaAbstraction labelName finalExpr)

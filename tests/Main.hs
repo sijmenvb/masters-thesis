@@ -24,7 +24,7 @@ trim = f . f
 
 main :: IO ()
 main = hspec $ do
-  describe "code suggestions" $ do
+  describe "basic code suggestions" $ do
     it "removing extra parenthesis from simple addition" $ do
       runSuggestion "fun = plus 2 4)" `shouldBe` "fun = plus 2 4 , Int"
 
@@ -46,6 +46,42 @@ main = hspec $ do
     it "swapping twice" $ do
       runSuggestion "fun = invertNum invertNum 6 True False" `shouldBe` "fun = invertNum False (invertNum True 6) , Int"
 
+  describe "lambda expressions code suggestions" $ do
+    it "basic lambda parenthesis " $ do
+      runSuggestion "fun = \\x -> plus x x)" `shouldBe` "fun = (\\x -> plus x x) , (Int -> Int)"
+    
+    it "basic lambda applied " $ do
+      runSuggestion "fun = \\x -> plus x x 5" `shouldBe` "fun = (\\x -> plus x x) 5 , Int"
+
+    it "multiple input lambda  " $ do
+      runSuggestion "fun = \\x y -> plus x y) 5" `shouldBe` "fun = (\\x y -> plus x y) 5 , (Int -> Int)"
+
+    it "respect subdividing lambda" $ do
+      runSuggestion "fun = \\x -> (\\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+   
+    it "no brackets at all" $ do
+      runSuggestion "fun = \\x -> \\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+    
+    it "lambda as argument " $ do
+      runSuggestion "fun = trice \\x -> plus x x 5" `shouldBe` "fun = trice (\\x -> plus x x) 5 , Int"
+    
+    it "nested lambda " $ do
+      runSuggestion "fun = trice \\x -> trice \\y -> plus y y x 5" `shouldBe` "fun = trice (\\x -> trice (\\y -> plus y y) x) 5 , Int"
+
+    it " = instead of -> " $ do
+      runSuggestion "fun = trice \\x = plus 5 x 8)" `shouldBe` "fun = trice (\\x -> plus 5 x) 8 , Int"
+
+    it "missing -> with set goal " $ do
+      runSuggestion "fun = iterate \\x plus 5 x 8 2" `shouldBe` "fun = iterate (\\x -> plus 5 x) 8 2 , Int"
+      
+    it "swap with set goal " $ do
+      runSuggestion "fun = iterate \\x invertNum x True 8 2" `shouldBe` "fun = iterate (\\x -> invertNum True x) 8 2 , Int"
+    
+    it "partially applied expression in lambda body" $ do
+      runSuggestion "combiner :: (Int -> Int -> Int) -> Int -> (Int -> Int)\nfun = combiner \\x -> plus 4 5 6)" `shouldBe` "fun = combiner (\\x -> plus 4) 5 6 , Int"
+    
+
+
 
 
 standardTypesAsString :: String
@@ -55,6 +91,7 @@ standardTypesAsString =
     [ "plus :: Int -> Int -> Int",
       "trice f x = f (f (f x))",
       "invertNum :: Bool -> Int -> Int",
+      "iterate :: (Int -> Int) -> Int -> (Int -> Int)",
 
       "\n" -- do not remove the \n this should remain last in the list
     ]

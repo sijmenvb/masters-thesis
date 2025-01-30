@@ -1,11 +1,12 @@
 {-# LANGUAGE InstanceSigs #-}
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-
 {-# HLINT ignore "Use tuple-section" #-}
 {-# HLINT ignore "Eta reduce" #-}
 {-# HLINT ignore "Replace case with fromMaybe" #-}
 {-# HLINT ignore "Use lambda-case" #-}
 {-# HLINT ignore "Use const" #-}
+{-# OPTIONS_GHC -Wno-overlapping-patterns #-}
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
 module Suggestions.Suggestions where
 
 import Data.Foldable
@@ -17,10 +18,11 @@ import Data.Void
 import Debug.Trace (trace)
 import GHC.Base (TyCon (TyCon))
 import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOriginalShow, showTokenInfoWithPosition)
+import Parser.Parser (buildLambdaExpression)
 import Parser.ParserBase
 import Parser.Types
 import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
-import Text.Megaparsec (ParseErrorBundle, between, errorBundlePretty)
+import Text.Megaparsec (ParseErrorBundle, Stream (Token), between, errorBundlePretty)
 import TypeInference.TypeInference
   ( Errorable (..),
     FailMessage (..),
@@ -85,8 +87,7 @@ generateSuggestion state typeEnv tokens =
         _ -> []
 
       arguments :: [WithSimplePos LabelIdentifier]
-      arguments = getArguments (tail tokens) --TODO: make sure this errors instead of crashing
-
+      arguments = getArguments (tail tokens) -- TODO: make sure this errors instead of crashing
       argumentTypeVars :: TypeEnvironment
       argumentTypeVars =
         case Map.lookup functionName typeEnv of
@@ -322,8 +323,8 @@ findFirstMatch goal ((canExpr, canTyp, canState) : list) = case mostGeneralUnifi
 -- takes a target type, a maybe in case  we are currently building a function and a list of the candidates found thus far.
 generateExpressionSuggestion :: Type -> Maybe Type -> [Candidate] -> SuggestionBuilder [Candidate]
 generateExpressionSuggestion goal currentProcessType accumulator =
-  let getExpr :: Type -> SuggestionBuilder Candidate
-      getExpr goal =
+  let getExpr :: SuggestionBuilder Candidate
+      getExpr =
         do
           tok <- getToken (fail $ "Not Enough tokens to satisfy goal:\n" ++ show goal ++ "\n!")
           case tok of
@@ -354,11 +355,42 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   applySubstitutionToSuggestionBuilder sub
                   currentState <- getSuggestionBuilderState
                   return (WithSimplePos start end (Bool False), TypeCon TypeBool, currentState)
-            _ -> getExpr goal
+            (TokenInfo Lambda _ start end) -> processLambda start
+            _ -> getExpr
+
+      processLambda start = do
+        currentTypeEnv <- getTypeEnvironment
+        let (goalArguments, goalReturnType) = typeToArguments goal
+        arguments <- case goalReturnType of
+          (FreshVar _) ->
+            -- in case the return type of the goal is a free variable we do not know how many arguments should be consumed.
+            getArgumentsFromTokens (-1)
+          _ ->
+            -- in case the goal's return type is some constant we know how many arguments at maximum it will take
+            getArgumentsFromTokens (length goalArguments)
+        consumeTokenIfExists RArrow -- only consume the -> if it exists this helps in cases where the wrong symbol is used or the arrow is forgotten (and we know by the goal how many arguments we need)
+        unconsumedArguments <- addArgumentsToTypeEnvironment goalArguments arguments
+        let expressionGoal = buildTypeFromArguments unconsumedArguments goalReturnType
+        candidates <- generateExpressionSuggestion expressionGoal Nothing []
+        let go candidateList = case candidateList of
+              [] -> fail $ "could not generate an expression for this lambda stating at " ++ show start
+              (expr, typ, env) : otherCandidates -> do
+                setSuggestionBuilderState env -- if we partially apply we need to revert the state.
+                newTypeEnv <- getTypeEnvironment
+                let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
+                let finalType = buildTypeFromArguments typeArguments typ
+                case mostGeneralUnifier finalType goal of
+                    Nothing -> go otherCandidates --if lambda type does not match goal try partially applied version
+                    Just sub -> do
+                      finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
+                      setTypeEnvironment currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                      currentState <- getSuggestionBuilderState
+                      return (finalExpr, finalType, currentState)
+        go candidates
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
-      -- it will revert to before this substitution so one can continue taking arguments. TODO: make a note of this
+      -- it will revert to before this substitution so one can continue taking arguments. 
       addToAccumulator :: [Candidate] -> Type -> Candidate -> SuggestionBuilder [Candidate]
       addToAccumulator accumulator goal candidate@(candidateExpr, candidateType, candidateState) = case mostGeneralUnifier candidateType goal of
         Nothing -> return $ candidate : accumulator
@@ -372,8 +404,8 @@ generateExpressionSuggestion goal currentProcessType accumulator =
         Nothing ->
           try
             ( do
-                nextArg@(expr, nextArgType, _) <- getExpr goal
-                case (nextArgType) of
+                nextArg@(expr, nextArgType, _) <- getExpr
+                case nextArgType of
                   (TypeArrow _ _) -> do
                     newAccumulator <- addToAccumulator accumulator goal nextArg
                     generateExpressionSuggestion goal (Just nextArgType) newAccumulator
@@ -400,7 +432,8 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                             currentState <- getSuggestionBuilderState
                             newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
                             res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
-                            trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res)) return res
+                            -- trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res))
+                            return res
                         )
                         ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
                           plugInArgument xs
@@ -451,9 +484,60 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                           nextArgumentCandidates <- generateExpressionSuggestion freshVar Nothing []
                           swapArguments nextArgumentCandidates
                       )
-                      (return accumulator) 
+                      (return accumulator)
                   )
         Just _ -> return accumulator
+
+getArgumentsFromTokens :: Int -> SuggestionBuilder [TokenInfo]
+getArgumentsFromTokens 0 = return []
+getArgumentsFromTokens limit = do
+  currentState <- getSuggestionBuilderState
+  token <- popToken
+  case token of
+    (TokenInfo (Name name) _ start end) -> do
+      list <- getArgumentsFromTokens (limit - 1)
+      return $ token : list
+    _ -> do
+      setSuggestionBuilderState currentState -- un-consume the token
+      return []
+
+consumeTokenIfExists :: Lexer.Tokens.Token -> SuggestionBuilder ()
+consumeTokenIfExists target = do
+  currentState <- getSuggestionBuilderState
+  token <- popToken
+  case token of
+    (TokenInfo foundToken _ _ _) | foundToken == target -> return ()
+    _ ->
+      do
+        setSuggestionBuilderState currentState -- un-consume the token
+        return ()
+
+-- takes a list of types and tokens and adds the tokens to the type enviornment.
+-- if there are types it a token will get it assigned otherwise it gets a free variable.
+-- will Return the types that were not assigned.
+addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type]
+addArgumentsToTypeEnvironment types [] = return types
+addArgumentsToTypeEnvironment (typ : restOfTypes) (x : xs) = do
+  -- if there is a type given use it
+  addLabelToTypeEnvironment typ x
+  addArgumentsToTypeEnvironment restOfTypes xs
+addArgumentsToTypeEnvironment [] (x : xs) = do
+  -- if there is no type given use a fresh variable
+  addLabelToTypeEnvironmentAsFreshVar x
+  addArgumentsToTypeEnvironment [] xs
+
+addLabelToTypeEnvironment :: Type -> TokenInfo -> SuggestionBuilder ()
+addLabelToTypeEnvironment typ (TokenInfo (Name name) _ start end) = do
+  typeEnv <- getTypeEnvironment
+  setTypeEnvironment $ Map.insert name typ typeEnv
+addLabelToTypeEnvironment _ _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
+
+addLabelToTypeEnvironmentAsFreshVar :: TokenInfo -> SuggestionBuilder ()
+addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = do
+  typeEnv <- getTypeEnvironment
+  freshVar <- getFreshVar
+  setTypeEnvironment $ Map.insert name freshVar typeEnv
+addLabelToTypeEnvironmentAsFreshVar _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
 
 -- moves the first match with the first argument to the front, reordering the list. and giving the index to undo the swapping later
 firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])

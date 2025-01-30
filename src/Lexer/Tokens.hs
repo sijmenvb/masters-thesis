@@ -168,5 +168,6 @@ recreateOriginalShow tokensIn =
         Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) tokensRest
         tok : Rpar : tokensRest -> showExact tok ++ recreateOriginalShow2 indentLevel (Rpar : tokensRest)
         Lpar : tokensRest -> showExact Lpar ++ recreateOriginalShow2 indentLevel tokensRest
+        Lambda : tokensRest -> showExact Lambda ++ recreateOriginalShow2 indentLevel tokensRest
         tok : tokensRest -> showExact tok ++ " " ++ recreateOriginalShow2 indentLevel tokensRest
    in recreateOriginalShow2 0 tokensIn
