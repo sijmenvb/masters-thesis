@@ -359,7 +359,6 @@ generateExpressionSuggestion goal currentProcessType accumulator =
             _ -> getExpr
 
       processLambda start = do
-        -- TODO: make less generic version if there is a goal.
         currentTypeEnv <- getTypeEnvironment
         let (goalArguments,goalReturnType) =  typeToArguments goal
         arguments <- case goalReturnType of
@@ -369,11 +368,12 @@ generateExpressionSuggestion goal currentProcessType accumulator =
           _ -> -- in case the goal's return type is some constant we know how many arguments at maximum it will take 
             getArgumentsFromTokens (length goalArguments)
         consumeTokenIfExists RArrow -- only consume the -> if it exists this helps in cases where the wrong symbol is used or the arrow is forgotten (and we know by the goal how many arguments we need)
-        addArgumentsToTypeEnvironment goalArguments arguments 
-        candidates <- generateExpressionSuggestion goalReturnType Nothing []
+        unconsumedArguments <- addArgumentsToTypeEnvironment goalArguments arguments 
+        let expressionGoal = buildTypeFromArguments unconsumedArguments goalReturnType
+        candidates <- generateExpressionSuggestion expressionGoal Nothing []
         case candidates of
           [] -> fail "could not generate an expression for this lambda"
-          (expr, typ, _) : rest -> do
+          (expr, typ, _) : rest -> do --TODO: take the first candidate that matches the goal
             finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
             newTypeEnv <- getTypeEnvironment
             let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
@@ -426,7 +426,8 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                             currentState <- getSuggestionBuilderState
                             newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
                             res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
-                            trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res)) return res
+                            --trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res)) 
+                            return res
                         )
                         ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
                           plugInArgument xs
@@ -505,8 +506,11 @@ consumeTokenIfExists target = do
         setSuggestionBuilderState currentState -- un-consume the token
         return ()
 
-addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder ()
-addArgumentsToTypeEnvironment _ [] = return ()
+-- takes a list of types and tokens and adds the tokens to the type enviornment.
+-- if there are types it a token will get it assigned otherwise it gets a free variable.
+-- will Return the types that were not assigned.
+addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type] 
+addArgumentsToTypeEnvironment types [] = return types
 addArgumentsToTypeEnvironment (typ: restOfTypes) (x : xs) = do --if there is a type given use it
   addLabelToTypeEnvironment typ x
   addArgumentsToTypeEnvironment restOfTypes xs
