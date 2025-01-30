@@ -77,6 +77,9 @@ main = hspec $ do
     it "swap with set goal " $ do
       runSuggestion "fun = iterate \\x invertNum x True 8 2" `shouldBe` "fun = iterate (\\x -> invertNum True x) 8 2 , Int"
     
+    it "partially applied expression in lambda body" $ do
+      runSuggestion "combiner :: (Int -> Int -> Int) -> Int -> (Int -> Int)\nfun = combiner \\x -> plus 4 5 6)" `shouldBe` "fun = combiner (\\x -> plus 4) 5 6 , Int"
+    
 
 
 

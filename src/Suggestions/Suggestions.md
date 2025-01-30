@@ -8,6 +8,17 @@
       - [note on indexing for swapping](#note-on-indexing-for-swapping)
       - [example with tree swaps:](#example-with-tree-swaps)
     - [addToAccumulator](#addtoaccumulator)
+    - [lambda expression suggestions](#lambda-expression-suggestions)
+      - [In detail:](#in-detail)
+        - [get the current type environment](#get-the-current-type-environment)
+        - [getting the arguments](#getting-the-arguments)
+        - [consuming the -\>](#consuming-the--)
+        - [adding arguments to the type environment](#adding-arguments-to-the-type-environment)
+        - [generating the expression in the lambda](#generating-the-expression-in-the-lambda)
+        - [building the type of the lambda expression](#building-the-type-of-the-lambda-expression)
+        - [building the lambda expression](#building-the-lambda-expression)
+        - [reverting the type environment](#reverting-the-type-environment)
+        - [constructing the candidate](#constructing-the-candidate)
 - [Token Difference](#token-difference)
   - [types to token streams](#types-to-token-streams)
   - [generating the differences](#generating-the-differences)
@@ -239,18 +250,22 @@ to do this we use `addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> Sug
 we use the normal way of calling `generateExpressionSuggestion` for the goal we can combine the unused arguments and the return type of the goal
 
 note: if there "is no goal" the goal will be a free variable. which is also the `goalReturnType`.
-##### building the lambda expression
-we can reuse the `buildLambdaExpression` to build the lambda from the arguments and generated expression. we also need to add the start position of the lambda. 
 
-note that lambdas like `(\x y -> 4)` are interpreted as `(\x -> (\y -> 4))` internally
-
---TODO: we take the first candidate that matches the goal
+This will generate a list of candidates for the body of the lambda.
 ##### building the type of the lambda expression
 we can build the type of the complete lambda if we know the type of the arguments and the type of the expression. 
 
 we can het the types by looking the arguments up using the (now updated) type environment. 
 
 then we can use the `buildTypeFromArguments` to construct the final type
+
+We do this for each candidate expression generated and we'll continue with the first one that fits the goal. (starting with the most greedy version)
+
+##### building the lambda expression
+we can reuse the `buildLambdaExpression` to build the lambda from the arguments and generated expression. we also need to add the start position of the lambda. 
+
+note that lambdas like `(\x y -> 4)` are interpreted as `(\x -> (\y -> 4))` internally
+
 
 ##### reverting the type environment
 since we now have the lambda expression and it's type we can make sure we revert the type environment.
