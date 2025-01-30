@@ -360,31 +360,37 @@ generateExpressionSuggestion goal currentProcessType accumulator =
 
       processLambda start = do
         currentTypeEnv <- getTypeEnvironment
-        let (goalArguments,goalReturnType) =  typeToArguments goal
+        let (goalArguments, goalReturnType) = typeToArguments goal
         arguments <- case goalReturnType of
           (FreshVar _) ->
             -- in case the return type of the goal is a free variable we do not know how many arguments should be consumed.
             getArgumentsFromTokens (-1)
-          _ -> -- in case the goal's return type is some constant we know how many arguments at maximum it will take 
+          _ ->
+            -- in case the goal's return type is some constant we know how many arguments at maximum it will take
             getArgumentsFromTokens (length goalArguments)
         consumeTokenIfExists RArrow -- only consume the -> if it exists this helps in cases where the wrong symbol is used or the arrow is forgotten (and we know by the goal how many arguments we need)
-        unconsumedArguments <- addArgumentsToTypeEnvironment goalArguments arguments 
+        unconsumedArguments <- addArgumentsToTypeEnvironment goalArguments arguments
         let expressionGoal = buildTypeFromArguments unconsumedArguments goalReturnType
         candidates <- generateExpressionSuggestion expressionGoal Nothing []
-        case candidates of
-          [] -> fail "could not generate an expression for this lambda"
-          (expr, typ, _) : rest -> do --TODO: take the first candidate that matches the goal
-            finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
-            newTypeEnv <- getTypeEnvironment
-            let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
-            let finalType = buildTypeFromArguments typeArguments typ
-            setTypeEnvironment currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
-            currentState <- getSuggestionBuilderState
-            return (finalExpr, finalType, currentState)
+        let go candidateList = case candidateList of
+              [] -> fail $ "could not generate an expression for this lambda stating at " ++ show start
+              (expr, typ, env) : otherCandidates -> do
+                setSuggestionBuilderState env -- if we partially apply we need to revert the state.
+                newTypeEnv <- getTypeEnvironment
+                let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
+                let finalType = buildTypeFromArguments typeArguments typ
+                case mostGeneralUnifier finalType goal of
+                    Nothing -> go otherCandidates --if lambda type does not match goal try partially applied version
+                    Just sub -> do
+                      finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
+                      setTypeEnvironment currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                      currentState <- getSuggestionBuilderState
+                      return (finalExpr, finalType, currentState)
+        go candidates
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
-      -- it will revert to before this substitution so one can continue taking arguments. TODO: make a note of this
+      -- it will revert to before this substitution so one can continue taking arguments. 
       addToAccumulator :: [Candidate] -> Type -> Candidate -> SuggestionBuilder [Candidate]
       addToAccumulator accumulator goal candidate@(candidateExpr, candidateType, candidateState) = case mostGeneralUnifier candidateType goal of
         Nothing -> return $ candidate : accumulator
@@ -399,7 +405,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
           try
             ( do
                 nextArg@(expr, nextArgType, _) <- getExpr
-                case (nextArgType) of
+                case nextArgType of
                   (TypeArrow _ _) -> do
                     newAccumulator <- addToAccumulator accumulator goal nextArg
                     generateExpressionSuggestion goal (Just nextArgType) newAccumulator
@@ -426,7 +432,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                             currentState <- getSuggestionBuilderState
                             newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
                             res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
-                            --trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res)) 
+                            -- trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res))
                             return res
                         )
                         ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
@@ -509,15 +515,16 @@ consumeTokenIfExists target = do
 -- takes a list of types and tokens and adds the tokens to the type enviornment.
 -- if there are types it a token will get it assigned otherwise it gets a free variable.
 -- will Return the types that were not assigned.
-addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type] 
+addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type]
 addArgumentsToTypeEnvironment types [] = return types
-addArgumentsToTypeEnvironment (typ: restOfTypes) (x : xs) = do --if there is a type given use it
+addArgumentsToTypeEnvironment (typ : restOfTypes) (x : xs) = do
+  -- if there is a type given use it
   addLabelToTypeEnvironment typ x
   addArgumentsToTypeEnvironment restOfTypes xs
-addArgumentsToTypeEnvironment [] (x : xs) = do --if there is no type given use a fresh variable
+addArgumentsToTypeEnvironment [] (x : xs) = do
+  -- if there is no type given use a fresh variable
   addLabelToTypeEnvironmentAsFreshVar x
   addArgumentsToTypeEnvironment [] xs
-
 
 addLabelToTypeEnvironment :: Type -> TokenInfo -> SuggestionBuilder ()
 addLabelToTypeEnvironment typ (TokenInfo (Name name) _ start end) = do
