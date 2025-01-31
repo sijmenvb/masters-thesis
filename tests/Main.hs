@@ -57,10 +57,10 @@ main = hspec $ do
       runSuggestion "fun = \\x y -> plus x y) 5" `shouldBe` "fun = (\\x y -> plus x y) 5 , (Int -> Int)"
 
     it "respect subdividing lambda" $ do
-      runSuggestion "fun = \\x -> (\\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+      runSuggestion "fun = \\x -> (\\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (Int -> Int)"
    
     it "no brackets at all" $ do
-      runSuggestion "fun = \\x -> \\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (v6 -> Int)"
+      runSuggestion "fun = \\x -> \\y -> plus x y 5" `shouldBe` "fun = (\\x -> (\\y -> plus x y) 5) , (Int -> Int)"
     
     it "lambda as argument " $ do
       runSuggestion "fun = trice \\x -> plus x x 5" `shouldBe` "fun = trice (\\x -> plus x x) 5 , Int"
@@ -79,6 +79,9 @@ main = hspec $ do
     
     it "partially applied expression in lambda body" $ do
       runSuggestion "combiner :: (Int -> Int -> Int) -> Int -> (Int -> Int)\nfun = combiner \\x -> plus 4 5 6)" `shouldBe` "fun = combiner (\\x -> plus 4) 5 6 , Int"
+    
+    it "lambda shadowing" $ do
+      runSuggestion "applyIf :: (Int -> Int) -> Bool -> Int -> Int\nx :: Bool \nfun = applyIf \\x -> plus 4 x x) 5" `shouldBe` "fun = applyIf (\\x -> plus 4 x) x 5 , Int"
     
 
 

@@ -222,7 +222,7 @@ In short it works as follows:
 4. generate an expression (and type) with this new environment
 5. read the types from the arguments from the now updated type environment
 6. use the generated expression and type with the arguments and their types to build up a return type and lambda expression that form a candidate.
-7. revert the type environment
+7. revert the type environment for arguments
 
 #### In detail:
 ##### get the current type environment
@@ -268,7 +268,9 @@ note that lambdas like `(\x y -> 4)` are interpreted as `(\x -> (\y -> 4))` inte
 
 
 ##### reverting the type environment
-since we now have the lambda expression and it's type we can make sure we revert the type environment.
+since we now have the lambda expression and it's type we can make sure we revert the type environment for the arguments.
+
+we revert it only for the arguments defined by this lambda as they should not exist outside the lambda (unless they already did and the lambda shadowed them). we cannot revert the entire type environment as applications within the lambda can specialise types.
 
 ##### constructing the candidate
 to finish up we take the current state (now with the old type environment) the lamda and its type to construct the candidate required.
