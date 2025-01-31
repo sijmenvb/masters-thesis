@@ -383,7 +383,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                     Nothing -> go otherCandidates --if lambda type does not match goal try partially applied version
                     Just sub -> do
                       finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
-                      setTypeEnvironment currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                      revertTypeEnvironment arguments currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
                       currentState <- getSuggestionBuilderState
                       return (finalExpr, finalType, currentState)
         go candidates
@@ -538,6 +538,15 @@ addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = do
   freshVar <- getFreshVar
   setTypeEnvironment $ Map.insert name freshVar typeEnv
 addLabelToTypeEnvironmentAsFreshVar _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
+
+revertTypeEnvironment :: [TokenInfo] -> TypeEnvironment -> SuggestionBuilder ()
+revertTypeEnvironment tokens oldTypeEnvironment = do 
+  newTypeEnvironment <- getTypeEnvironment
+  let revert [] typeEnv = typeEnv
+      revert (TokenInfo (Name name) _ _ _: restOfTokens) typeEnv = case Map.lookup name oldTypeEnvironment of
+        Nothing -> revert restOfTokens $ Map.delete name typeEnv
+        Just typ -> revert restOfTokens $ Map.insert name typ typeEnv
+  setTypeEnvironment $ revert tokens newTypeEnvironment
 
 -- moves the first match with the first argument to the front, reordering the list. and giving the index to undo the swapping later
 firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])
