@@ -1,5 +1,6 @@
 module Parser.Types where
 
+import qualified Data.Foldable as List
 import qualified Data.Map as Map
 import Data.Maybe
 import Parser.ParserBase
@@ -17,7 +18,7 @@ data Expr
   | Bool Bool
   | Label LabelIdentifier
   | LambdaAbstraction LabelIdentifier (WithSimplePos Expr)
-  | LetExpression Pattern (WithSimplePos Expr) (WithSimplePos Expr)
+  | LetExpression [(Pattern, [LabelIdentifier], WithSimplePos Expr)] (WithSimplePos Expr)
 
 -- used to construct a application while preserving position information
 buildApplication :: WithSimplePos Expr -> WithSimplePos Expr -> WithSimplePos Expr
@@ -31,8 +32,9 @@ expressionToArguments =
           _ -> (exprWithPos, acc)
    in go []
 
-buildExpressionFromArguments :: WithSimplePos Expr -> [WithSimplePos Expr] ->  WithSimplePos Expr
+buildExpressionFromArguments :: WithSimplePos Expr -> [WithSimplePos Expr] -> WithSimplePos Expr
 buildExpressionFromArguments = foldl buildApplication
+
 -- instance Show Expr generated with chatgpt.
 instance Show Expr where
   show (Parentheses expr) = "( " ++ show expr ++ " )"
@@ -41,7 +43,10 @@ instance Show Expr where
   show (Bool b) = show b
   show (Label label) = label
   show (LambdaAbstraction name expr) = "\\" ++ name ++ " -> " ++ show expr
-  show (LetExpression patttern expr1 expr2) = "let " ++ show patttern ++ " = " ++ show expr1 ++ " in " ++ show expr2
+  show (LetExpression bodies expr2) =
+    let argumentsString arguments = concatMap (\x -> " " ++ show x) arguments
+        showBody (patttern, arguments, expr1) = show patttern ++ argumentsString arguments ++ " = " ++ show expr1 ++ "\n\t"
+     in "let " ++ List.concatMap showBody bodies ++ " in " ++ show expr2
 
 -- used to store function definitions that look like:
 -- FunctionName [LabelIdentifier] = (WithSimplePos Expr)

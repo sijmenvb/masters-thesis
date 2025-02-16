@@ -1,0 +1,1 @@
+these test programs are here for ease of development. For actual tests suites see tests/Main.hs

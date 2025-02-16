@@ -14,6 +14,7 @@ import Suggestions.Suggestions
 import Text.Megaparsec
 import TypeInference.TypeInference (MaybeError (..))
 import TypeInference.TypeInferenceUtil ( inferTypeEnvironment )
+import Control.Monad.State
 
 
 -- actually prints nextlines
@@ -26,13 +27,14 @@ standardTypeEnv = Map.empty
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
-  let fileName = "./test programs/suggestions.hs"
+  let fileName = "./test programs/suggestions2.hs"
   sourceString <- readFile fileName
   case runLexer sourceString of
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
       let sections = sanitizeSections $ splitIntoSections parsedTokens
-          parsedMaybeSections = List.map (parse pSection fileName . tokensToParsableString sourceString) sections
+      
+          parsedMaybeSections = List.map (\section -> evalState (runParserT pSection fileName ( tokensToParsableString sourceString section)) ParserState { indentLevel = 0 } ) sections
           (parsedErrors, parsedSections) = partitionEithers parsedMaybeSections
           parseProblemsBundle = getParseProblems parsedMaybeSections sections
           (inferredTypes, inferenceProblems, state) = inferTypeEnvironment standardTypeEnv (map (\(WithSimplePos _ _ x) -> x) parsedSections)

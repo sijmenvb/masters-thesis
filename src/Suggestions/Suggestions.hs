@@ -95,8 +95,10 @@ generateSuggestion state typeEnv tokens =
           _ -> Map.fromList $ indexedMap (\index (WithSimplePos _ _ name) -> (name, FreshVar $ state + index)) arguments
           Just expectedFunctionType -> Map.empty
 
-      expressionTokens = (tail . dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign)) tokens
-
+      expressionTokens = case dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign) tokens of
+        [] -> []
+        exprTokens -> tail exprTokens
+        
       buildReturnType :: TypeEnvironment -> [WithSimplePos LabelIdentifier] -> Type -> MaybeError Type
       buildReturnType typeEnv args typ =
         let go argsIn = case argsIn of
@@ -380,17 +382,17 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                 let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
                 let finalType = buildTypeFromArguments typeArguments typ
                 case mostGeneralUnifier finalType goal of
-                    Nothing -> go otherCandidates --if lambda type does not match goal try partially applied version
-                    Just sub -> do
-                      finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
-                      revertTypeEnvironment arguments currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
-                      currentState <- getSuggestionBuilderState
-                      return (finalExpr, finalType, currentState)
+                  Nothing -> go otherCandidates -- if lambda type does not match goal try partially applied version
+                  Just sub -> do
+                    finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
+                    revertTypeEnvironment arguments currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                    currentState <- getSuggestionBuilderState
+                    return (finalExpr, finalType, currentState)
         go candidates
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
-      -- it will revert to before this substitution so one can continue taking arguments. 
+      -- it will revert to before this substitution so one can continue taking arguments.
       addToAccumulator :: [Candidate] -> Type -> Candidate -> SuggestionBuilder [Candidate]
       addToAccumulator accumulator goal candidate@(candidateExpr, candidateType, candidateState) = case mostGeneralUnifier candidateType goal of
         Nothing -> return $ candidate : accumulator
@@ -540,10 +542,10 @@ addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = do
 addLabelToTypeEnvironmentAsFreshVar _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
 
 revertTypeEnvironment :: [TokenInfo] -> TypeEnvironment -> SuggestionBuilder ()
-revertTypeEnvironment tokens oldTypeEnvironment = do 
+revertTypeEnvironment tokens oldTypeEnvironment = do
   newTypeEnvironment <- getTypeEnvironment
   let revert [] typeEnv = typeEnv
-      revert (TokenInfo (Name name) _ _ _: restOfTokens) typeEnv = case Map.lookup name oldTypeEnvironment of
+      revert (TokenInfo (Name name) _ _ _ : restOfTokens) typeEnv = case Map.lookup name oldTypeEnvironment of
         Nothing -> revert restOfTokens $ Map.delete name typeEnv
         Just typ -> revert restOfTokens $ Map.insert name typ typeEnv
   setTypeEnvironment $ revert tokens newTypeEnvironment
