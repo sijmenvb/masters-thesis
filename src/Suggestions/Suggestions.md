@@ -23,6 +23,8 @@
   - [types to token streams](#types-to-token-streams)
   - [generating the differences](#generating-the-differences)
     - [performance](#performance)
+- [Notable challenges](#notable-challenges)
+  - [Indentation](#indentation)
 
 # Suggestions
 in short suggestions are generated as follows. 
@@ -330,3 +332,33 @@ to generate this difference we do not always decide to add or remove, if the req
 we also use dynamic programming, meaning we store intermediate results because the recursive algorithm often takes two different routes to the same path. this sped up the algorithm **MASSIVELY**. 
 
 in general we believe this difference calculating is currently way more computationally intensive than generating the suggestion in the first place. 
+
+# Notable challenges
+## Indentation
+haskell has indentation sensitive syntax. namely let and case expressions. 
+We want to be able to correct mistakes in indentation. yet it is vital we do not make assumptions that can change a valid expression into a different valid expression. Otherwise we can get cases where the body of a let changes while there was only a missing parenthesis in the `in` part. 
+
+we examplify this by a particularly difficult case. take:
+
+```hs
+plus x y = x + y
+
+triFun :: Int -> Int -> Int -> Int
+
+fun x = 
+  let 
+    fun2 x y = triFun x y
+     plus x y = modulo (x + y) 5
+  in fun2 (plus x 7)
+```
+here the problem is an extra space in front of plus. 
+
+However once we get to the definition of fun2 if we try to build a suggestion from there normally we get
+ ` fun2 x y = triFun x y (plus x y) :: Int`
+ being left with the token stream ` = modulo (x ...` which will not build a suggestion. even worse, if the indentation was correct we would have the same issue as we currently ignore any indentation in building the suggestion for an expression.
+
+ One big culprit in this failure is the name shadowing. if the plus in the let would not exists already the plus will not be consumed by the expression suggestion, thus the expression would parse propperly.
+
+ this sounds like the same problem would occur when normally parsing multiple functions. there we solve it by having a pre processing step that looks at the tokens and splits them into functions based on indentation. so what we might want is some kind of pre-processor that can look at the body of our let and can split up the function definitions. 
+
+ Unfortunately we cannot rely on indentation again as that is what we are trying to fix.  

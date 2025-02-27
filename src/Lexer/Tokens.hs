@@ -162,6 +162,7 @@ recreateOriginalShow :: [Token] -> String
 recreateOriginalShow tokensIn =
   let recreateOriginalShow2 :: Int -> [Token] -> String
       recreateOriginalShow2 indentLevel tokens = case tokens of
+        Newline : Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (Newline:tokensRest)
         [] -> ""
         Newline : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
         Indent : tokensRest -> recreateOriginalShow2 (indentLevel + 1) tokensRest

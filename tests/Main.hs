@@ -34,7 +34,7 @@ main = hspec $ do
       runSuggestion "fun = (plus 2) 4)" `shouldBe` "fun = (plus 2) 4 , Int"
 
     it "brackets for partial application if required" $ do
-      runSuggestion "fun = trice plus 2 4)" `shouldBe` "fun = trice (plus 2) 4 , Int"
+      runSuggestion "fun = trice (plus 2 4" `shouldBe` "fun = trice (plus 2) 4 , Int"
 
     it "swap arguments" $ do
       runSuggestion "fun = invertNum 4 True" `shouldBe` "fun = invertNum True 4 , Int"

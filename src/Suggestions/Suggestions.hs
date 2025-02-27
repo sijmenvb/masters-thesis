@@ -7,6 +7,8 @@
 {-# OPTIONS_GHC -Wno-overlapping-patterns #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
+{-# HLINT ignore "Redundant return" #-}
+
 module Suggestions.Suggestions where
 
 import Data.Foldable
@@ -17,6 +19,7 @@ import Data.Tree (Tree (subForest))
 import Data.Void
 import Debug.Trace (trace)
 import GHC.Base (TyCon (TyCon))
+import GHC.ExecutionStack (Location (functionName))
 import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOriginalShow, showTokenInfoWithPosition)
 import Parser.Parser (buildLambdaExpression)
 import Parser.ParserBase
@@ -30,6 +33,7 @@ import TypeInference.TypeInference
     Substitution,
     applySubstitution,
     applySubstitutionToTypeEnvironment,
+    generateFreshVars,
     mostGeneralUnifier,
   )
 
@@ -98,7 +102,7 @@ generateSuggestion state typeEnv tokens =
       expressionTokens = case dropWhile (\tokenInfo -> token_type tokenInfo /= EqualsSign) tokens of
         [] -> []
         exprTokens -> tail exprTokens
-        
+
       buildReturnType :: TypeEnvironment -> [WithSimplePos LabelIdentifier] -> Type -> MaybeError Type
       buildReturnType typeEnv args typ =
         let go argsIn = case argsIn of
@@ -118,7 +122,8 @@ generateSuggestion state typeEnv tokens =
                 setTypeEnvironment (typeEnvWithArgs)
                 generateExpressionSuggestion typeGoal Nothing []
         (suggestions, builderState) <- runSugesstionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
-        (expr, typ, _) <- liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
+
+        (expr, typ, _) <- trace ("Debug suggestions:" ++ show suggestions) $liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
         let section = FunctionDefinition functionName arguments expr
         let (expectedTokens, _) = sectionToSuggestion section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
@@ -239,6 +244,13 @@ getFreshVar = do
   setFreshVarCounter $ freshVarCounter + 1
   return $ FreshVar freshVarCounter
 
+getFreshVars :: Int -> SuggestionBuilder [Type]
+getFreshVars 0 = return []
+getFreshVars num = do
+  res <- getFreshVar
+  rest <- getFreshVars (num - 1)
+  return $ res : rest
+
 {- getBranchCounter :: SuggestionBuilder Int
 getBranchCounter = getBranchCounterFromState <$> getSuggestionBuilderState
 
@@ -263,6 +275,11 @@ getTokens :: SuggestionBuilder [TokenInfo]
 getTokens =
   getTokensFromState <$> getSuggestionBuilderState
 
+setTokens :: [TokenInfo] -> SuggestionBuilder ()
+setTokens tokens = do
+  state <- getSuggestionBuilderState
+  setSuggestionBuilderState $ state {getTokensFromState = tokens}
+
 popToken :: SuggestionBuilder TokenInfo
 popToken =
   RunState
@@ -280,7 +297,7 @@ hasTokens =
     )
 
 -- try :: SuggestionBuilder a -> SuggestionBuilder a -> SuggestionBuilder a
-try :: Show a => SuggestionBuilder a -> SuggestionBuilder a -> SuggestionBuilder a
+try :: SuggestionBuilder a -> SuggestionBuilder a -> SuggestionBuilder a
 try (RunState run1) (RunState run2) =
   RunState
     ( \state -> case run1 state of
@@ -289,6 +306,19 @@ try (RunState run1) (RunState run2) =
           -- trace str $
           run2 (state {getBranchCounterFromState = getBranchCounterFromState state + 1})
     )
+
+consumeWhitespace :: SuggestionBuilder ()
+consumeWhitespace =
+  let removeWhitespace [] = []
+      removeWhitespace ((TokenInfo Indent _ _ _) : xs) = removeWhitespace xs
+      removeWhitespace ((TokenInfo Dedent _ _ _) : xs) = removeWhitespace xs
+      removeWhitespace ((TokenInfo Newline _ _ _) : xs) = removeWhitespace xs
+      removeWhitespace ((TokenInfo NewlineAfterComment _ _ _) : xs) = removeWhitespace xs
+      removeWhitespace ((TokenInfo (Comment _) _ _ _) : xs) = removeWhitespace xs
+      removeWhitespace list = list
+   in do
+        tokens <- getTokens
+        setTokens $ removeWhitespace tokens
 
 getToken :: SuggestionBuilder TokenInfo -> SuggestionBuilder TokenInfo
 getToken x = do
@@ -321,6 +351,103 @@ findFirstMatch _ [] = Nothing
 findFirstMatch goal ((canExpr, canTyp, canState) : list) = case mostGeneralUnifier canTyp goal of
   Nothing -> findFirstMatch goal list
   Just substitution -> Just (canExpr, applySubstitution substitution canTyp, canState)
+
+dropTypeArguments2 :: [LabelIdentifier] -> Type -> SuggestionBuilder (Type, TypeEnvironment)
+dropTypeArguments2 arguments typ = do
+  typeEnv <- getTypeEnvironment
+  case (arguments, typ) of
+    ([], t) -> return (t, typeEnv)
+    (_,FreshVar _ ) -> 
+      do
+        freshVar1 <- getFreshVar
+        freshVar2 <- getFreshVar
+        let newtyp = TypeArrow freshVar1 freshVar2
+        let sub = Map.insert typ newtyp Map.empty
+        applySubstitutionToSuggestionBuilder sub
+        dropTypeArguments2 arguments newtyp
+    (identifier : xs, TypeArrow a b) -> do 
+      setTypeEnvironment (Map.insert identifier a typeEnv)
+      dropTypeArguments2 xs  b
+    (identifier : xs, _) -> fail $ "Cannot take an argument from the type " ++ show typ ++ " to assign to " ++ show identifier ++ "!"
+
+generateFunctionSuggestion :: Type -> SuggestionBuilder (Pattern, [LabelIdentifier], WithSimplePos Expr, Type)
+generateFunctionSuggestion goal =
+  let getNextName = do
+        tok <- getToken (fail $ "Not Enough tokens to satisfy goal:\n" ++ show goal ++ "\n!")
+        case tok of
+          (TokenInfo (Name name) _ start end) -> return name
+          _ -> fail $ "name is not next found: " ++ show tok ++ " instead"
+
+      many :: SuggestionBuilder a -> SuggestionBuilder [a]
+      many x =
+        try
+          ( do
+              res <- x
+              rest <- many x
+              return $ res : rest
+          )
+          (return [])
+
+      buildReturnType :: [LabelIdentifier] -> Type -> SuggestionBuilder Type
+      buildReturnType args exprTyp =
+        let go typeEnv argsIn = case argsIn of
+              [] -> return exprTyp
+              identifier : xs ->
+                do
+                  argType <- liftError $ Map.lookup identifier typeEnv
+                  resultType <- go typeEnv xs
+                  return $ TypeArrow argType resultType
+         in do
+              typeEnv <- getTypeEnvironment
+              go typeEnv args
+   in do
+        functionName <- getNextName
+        arguments <- many getNextName
+        trace ("function name in let:" ++ functionName) $ consumeWhitespace
+        consumeTokenIfExists EqualsSign
+
+        freshVars <- getFreshVars (length arguments)
+        let pairs = zip arguments freshVars
+        startingTypeEnv <- trace ("fresh vars:" ++ show freshVars) $getTypeEnvironment
+        let typeEnvWithFreshVars = foldl (\typeEnv (argumentName, argumentType) -> Map.insert argumentName argumentType (Map.delete argumentName typeEnv)) startingTypeEnv pairs
+        setTypeEnvironment typeEnvWithFreshVars
+
+        (expressionGoal, updatedTypeEnv) <- trace ("goal:" ++ show goal) $ dropTypeArguments2 arguments goal
+        trace ("expressionGoal:" ++ show expressionGoal) $ setTypeEnvironment updatedTypeEnv
+
+        functionBodyCandidates <- generateExpressionSuggestion expressionGoal Nothing []
+
+        trace ("functionBodyCandidates:" ++ show functionBodyCandidates) $ findBestCandidate
+          goal
+          functionBodyCandidates
+          (buildReturnType arguments)
+          ( \expr typ sub -> do
+              return (functionName, arguments, expr, typ)
+          )
+
+-- findBestCandidate :: Type -> [Candidate] -> SuggestionBuilder Candidate
+findBestCandidate :: Type -> [Candidate] -> (Type -> SuggestionBuilder Type) -> (WithSimplePos Expr -> Type -> Substitution -> SuggestionBuilder b) -> SuggestionBuilder b
+findBestCandidate goal candidates typeTransform suggestionBuilderToTry =
+  let plugInArgument list =
+        case list of
+          (expr, nextArgType, state) : xs -> do
+            setSuggestionBuilderState state
+            currentTypeEnv <- getTypeEnvironment
+            typeToCompare <- typeTransform nextArgType
+            case mostGeneralUnifier typeToCompare goal of
+              Nothing ->
+                -- if the greedy version doesn't fit try the slightly less greedy result.
+                plugInArgument xs
+              Just sub ->
+                try
+                  (suggestionBuilderToTry expr typeToCompare sub)
+                  ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
+                    plugInArgument xs
+                  )
+          _ ->
+            -- no arguments fit
+            fail "no arguments fit"
+   in plugInArgument candidates
 
 -- takes a target type, a maybe in case  we are currently building a function and a list of the candidates found thus far.
 generateExpressionSuggestion :: Type -> Maybe Type -> [Candidate] -> SuggestionBuilder [Candidate]
@@ -358,8 +485,11 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                   currentState <- getSuggestionBuilderState
                   return (WithSimplePos start end (Bool False), TypeCon TypeBool, currentState)
             (TokenInfo Lambda _ start end) -> processLambda start
+            (TokenInfo Let _ start end) -> processLet start
+            (TokenInfo In _ start end) -> fail "\"in\" needs to be parsed separately"
             _ -> getExpr
 
+      processLambda :: (Int, Int) -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
       processLambda start = do
         currentTypeEnv <- getTypeEnvironment
         let (goalArguments, goalReturnType) = typeToArguments goal
@@ -390,6 +520,27 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                     return (finalExpr, finalType, currentState)
         go candidates
 
+      processLet :: (Int, Int) -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
+      processLet start = do
+        consumeWhitespace
+        freshVar <- getFreshVar
+        (letFunctionName, arguments, functionExpr, name) <- generateFunctionSuggestion freshVar
+        consumeWhitespace
+        consumeTokenIfExists In
+        consumeWhitespace
+        -- TODO: add function type to environment
+        candidates <- trace ("function name in let:" ++ letFunctionName) $ generateExpressionSuggestion goal Nothing []
+        findBestCandidate
+          goal
+          candidates
+          pure
+          ( \expr typ sub -> do
+              applySubstitutionToSuggestionBuilder sub
+              currentState <- getSuggestionBuilderState
+              let (WithSimplePos _ end _) = expr 
+              return (WithSimplePos start end $ LetExpression [(letFunctionName, arguments, functionExpr)] expr, typ, currentState)
+          )
+
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
       -- it will revert to before this substitution so one can continue taking arguments.
@@ -418,31 +569,20 @@ generateExpressionSuggestion goal currentProcessType accumulator =
         Just functionType@(TypeArrow argTyp retTyp) ->
           let (previousExpr, _, _) : _ = accumulator -- will never be an empty list. This is the reason we must be able to return candidates that do not match the goal (yet).
               plugInArgument :: [(WithSimplePos Expr, Type, SuggestionBuilderState)] -> SuggestionBuilder [Candidate]
-              plugInArgument candidates = case candidates of
-                (expr, nextArgType, state) : xs -> do
-                  setSuggestionBuilderState state
-
-                  case mostGeneralUnifier nextArgType argTyp of
-                    Nothing ->
-                      -- if the greedy version doesn't fit try the slightly less greedy result.
-                      plugInArgument xs
-                    Just sub ->
-                      try
-                        ( do
-                            applySubstitutionToSuggestionBuilder sub
-                            let retTypWithSub = applySubstitution sub retTyp
-                            currentState <- getSuggestionBuilderState
-                            newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
-                            res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
-                            -- trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res))
-                            return res
-                        )
-                        ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
-                          plugInArgument xs
-                        )
-                _ ->
-                  -- no arguments fit
-                  fail "no arguments fit"
+              plugInArgument candidates =
+                findBestCandidate
+                  argTyp
+                  candidates
+                  pure
+                  ( \expr _ sub -> do
+                      applySubstitutionToSuggestionBuilder sub
+                      let retTypWithSub = applySubstitution sub retTyp
+                      currentState <- getSuggestionBuilderState
+                      newAccumulator <- addToAccumulator accumulator goal (buildApplication previousExpr expr, retTypWithSub, currentState)
+                      res <- generateExpressionSuggestion goal (Just retTypWithSub) newAccumulator
+                      -- trace ("fits:" ++ show (map (\(a, b, _) -> (a, b)) res))
+                      return res
+                  )
 
               swapArguments :: [(WithSimplePos Expr, Type, SuggestionBuilderState)] -> SuggestionBuilder [Candidate]
               swapArguments candidates = case candidates of

@@ -1,13 +1,18 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Avoid lambda" #-}
 module Suggestions.TokenDifference where
 
 import Control.Monad.State as State
 import Data.Foldable (minimumBy)
 import Data.Function (on)
-import Data.Map as Map
+import Data.Map as Map hiding (map)
+import GHC.ExecutionStack (Location (functionName))
 import Lexer.Tokens
 import Parser.ParserBase (WithSimplePos (WithSimplePos))
 import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
+import Debug.Trace (trace)
 
 data Action a
   = Keep a
@@ -29,6 +34,7 @@ recreateOriginalWithDifferencesShow :: [Action Token] -> String
 recreateOriginalWithDifferencesShow tokensIn =
   let recreateOriginalShow2 :: Int -> [(Token, String, Action Token)] -> String
       recreateOriginalShow2 indentLevel tokens = case tokens of
+        t1@(Newline, _,  _) : (Dedent, _, _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (t1 : tokensRest)
         [] -> ""
         (Newline, color, Add _) : tokensRest -> color ++ "newline\n" ++ resetColor ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
         (Newline, _, _) : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
@@ -127,16 +133,27 @@ createTargetTokensFromExpr expr =
         (WithSimplePos _ _ (LambdaAbstraction _ _)) -> do
           let (arguments, exprInLambda) = getNestedLambdas expr
           exprTokens <- createTargetTokensFromExpr exprInLambda
-          let buildLamba args = case args of
+          let buildLambda args = case args of
                 [argumentName] -> return $ Require (Name argumentName) : Require RArrow : exprTokens
                 (argumentName : restOfArguments) -> do
                   lambdaID <- getId
-                  innerTokens <- buildLamba restOfArguments
+                  innerTokens <- buildLambda restOfArguments
                   return $ Require (Name argumentName) : Optional RArrow (Just lambdaID) : Optional Lpar (Just lambdaID) : Optional Lambda (Just lambdaID) : innerTokens ++ [Optional Rpar (Just lambdaID)]
 
-          lambdaBody <- buildLamba arguments
+          lambdaBody <- buildLambda arguments
 
           return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar]
+        (WithSimplePos _ _ (LetExpression definitions inExpressions)) ->
+          let defitionToTokens functionName identifiers expr = do
+                let nameToken = Require (Name functionName)
+                let argumentTokens = map (\name -> Require (Name name)) identifiers
+                exprTokens <- createTargetTokensFromExpr expr
+                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline]
+           in do
+                definitionTokens <- mapM (\(x, y, z) -> defitionToTokens x y z) definitions
+                inExpressionTokens <- createTargetTokensFromExpr inExpressions
+                firstIndentId <- getId
+                return $ [Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId), Require Let, Require Indent, Require Newline] ++ concat definitionTokens ++ [Require Dedent, Require In, Require Indent, Require Newline] ++ inExpressionTokens
         _ -> undefined
 
 needsParentheses :: Expr -> Bool
