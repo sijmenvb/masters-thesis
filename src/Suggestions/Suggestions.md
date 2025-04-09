@@ -1,5 +1,8 @@
 
 - [Suggestions](#suggestions)
+  - [Requirements](#requirements)
+    - [Soft](#soft)
+    - [Hard](#hard)
   - [generateSuggestion](#generatesuggestion)
   - [generateExpressionSuggestion](#generateexpressionsuggestion)
     - [calling generateExpressionSuggestion](#calling-generateexpressionsuggestion)
@@ -25,6 +28,8 @@
     - [performance](#performance)
 - [Notable challenges](#notable-challenges)
   - [Indentation](#indentation)
+      - [let parsing approach.](#let-parsing-approach)
+        - [implementation details](#implementation-details)
 
 # Suggestions
 in short suggestions are generated as follows. 
@@ -33,6 +38,12 @@ in short suggestions are generated as follows.
 3. transform this suggestion back into (every possible) token stream that could generate this expression.
 4. calculate the difference in tokens given and the ones generated as suggestion and present it to the user.
 
+## Requirements
+for generating our suggestions we have some soft and hard requirements
+### Soft
+if there was one mistake the
+### Hard
+If we take a valid function as a String and append a `)` to the end then giving this to the suggestion should generate the original string. (indentation might be slightly different, e.g. using 3 spaces instead of four) 
 ## generateSuggestion
 `generateSuggestion :: Int -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)`
 is responsible for generating suggestions for function definitions. 
@@ -354,11 +365,136 @@ fun x =
 here the problem is an extra space in front of plus. 
 
 However once we get to the definition of fun2 if we try to build a suggestion from there normally we get
- ` fun2 x y = triFun x y (plus x y) :: Int`
- being left with the token stream ` = modulo (x ...` which will not build a suggestion. even worse, if the indentation was correct we would have the same issue as we currently ignore any indentation in building the suggestion for an expression.
+` fun2 x y = triFun x y (plus x y) :: Int`
+being left with the token stream ` = modulo (x ...` which will not build a suggestion. even worse, if the indentation was correct we would have the same issue as we currently ignore any indentation in building the suggestion for an expression.
 
- One big culprit in this failure is the name shadowing. if the plus in the let would not exists already the plus will not be consumed by the expression suggestion, thus the expression would parse propperly.
+One big culprit in this failure is the name shadowing. if the plus in the let would not exists already the plus will not be consumed by the expression suggestion, thus the expression would parse properly.
 
- this sounds like the same problem would occur when normally parsing multiple functions. there we solve it by having a pre processing step that looks at the tokens and splits them into functions based on indentation. so what we might want is some kind of pre-processor that can look at the body of our let and can split up the function definitions. 
+this sounds like the same problem would occur when normally parsing multiple functions. there we solve it by having a pre processing step that looks at the tokens and splits them into functions based on indentation. so what we might want is some kind of pre-processor that can look at the body of our let and can split up the function definitions. 
 
- Unfortunately we cannot rely on indentation again as that is what we are trying to fix.  
+Unfortunately we cannot rely on indentation again as that is what we are trying to fix.  
+
+another problem with splitting syntactically is nesting. Take:
+```hs
+plus x y = x + y
+
+triFun :: Int -> Int -> Int -> Int
+
+fun x = 
+  let 
+    fun2 x y =
+      let 
+        plus x y = modulo (x + y) 5
+      in 
+        plus x y
+    myVar = 7
+  in 
+    fun2 x myVar)
+```
+if we just look for the pattern indicating a new local definition (newline, indent, list of names, equals sing , rest) we would split on the `plus x y = ` in the nested let as well. although for the first let this should not be done as the plus definition belongs to the nested let.
+
+
+our solution is a hybrid approach between parsing till stuck and splitting beforehand. as soon as we encounter a let, we split the tokens into sections that start with a (indent and) as list of names followed by an `=`. then this list is carried trough the program and will be eaten by any (nested) let expressions. 
+
+
+
+ TODO: split on "[names] =" pattern. give list of potential local definitions recursively in state, make let build expressions one by one. parse on remaining tokens later.
+
+
+| approach                                     | Can fix alternative definitions | out of oder dependencies | supports nesting | correct types with nesting | indentation insensitive | no extra bookkeeping recursively |
+|----------------------------------------------|---------------------------------|--------------------------|------------------|----------------------------|--------------------------|----------------------------------|
+| token-by-token approach                      |                                 |                          | X                | X                          | X                        | X                                |
+| naive splitting                              | X                               |                          |                  |                            | X                        | X                                |
+| naive splitting, order independent           | X                               | X                        |                  |                            | X                        | X                                |
+| naive splitting with dependency restrictions | X                               | X                        | X                | X                          | X                        |                                  |
+| splitting on indentation                     | X                               | X                        | X                | X                          |                          | X                                |
+
+
+#### let parsing approach.
+
+the main problem is that we cannot know what the type environment in a definition of a Let is as we have not looked at the further definitions. for example if plus is defined at the top level and at the bottom of a let:
+
+```hs
+plus x y = x + y
+
+fun x = 
+  let 
+    myVar = plus 7 8
+    fun2 x y =
+      let 
+        plus x y = modulo (x + y) 5
+      in 
+        plus x y
+
+    plus x y = modulo (x + y) 7
+  in 
+    fun2 x myVar)
+```
+
+our algorithem sees the following:
+typenv: `plus :: Int -> Int -> Int`
+tokenStreams: 
+```
+[[myvar, =, ...],
+ [plus, x, y, =, ...],
+ [plus, x, y, =, ...]]
+```
+
+in this case the bottom plus is the "correct" one as it matches the indentation. 
+in this case it would not matter as all the `plus` have the same type. but imagine if they did not, how would our algorithm know which of the three is the correct one.
+
+the only solution is to try all and pick the first configuration that allows for generating a suggestion. 
+
+we can do better than trying all combinations. 
+
+we can use the actual indentation to order the possibilities we will try we will put matching indents first, then lower indents, the closer the indent the sooner we'll try it. and then further indents. this way we will look at configurations matching the indent first. so if the mistake was somewhere else we immediately use the correct one.
+
+anther improvement we can make is by registering which variables where accessed. so if we fail to build a suggestion for a section of code that does not use our shadowed variable `plus` we will not try again with a different type for the variable that wasn't even used.
+
+to go even further we can only change our pick for which `plus` at the place where it was first used as everything before did not use `plus` to get to this point. 
+
+to go even even further we can see if it breaks at a `plus` and figure out if one of the types 
+
+##### implementation details
+
+we can find the exact indent for the ordering by looking at the row of the start position of the token since our `TokenInfo` retains source position information.
+
+for each let we need to 
+1. split into sections
+2. get the names of all the sections and get the duplicates (add special token for names already in the type environment).
+3. sort all the duplicates on the indent 
+4. get the next configuration that minimises indent changes.
+5. this config tells which definitions belong to this let
+6. add the things in this let to the type env to be computed as encountered (and save a copy to revert later)
+7. get all the suggestions for the definitions.
+8. get the definition for the in part (what is left for the last selected section)
+9. if any of this fails go to step 4.
+
+
+
+problems: 
+- how to respect indentation of inner lets. as in how to prevent our solution from (logically equivalently) pulling all definitions from a nested let to the bigger one instead of just the one that was the problem.
+- how to avoid invalid solutions where one of our definitions is left for a nested let that does not exist.
+- how to get the type environment to depend on the suggestion builder that requires said type environment (maybe lazy evaluation is enough?, but how to detect the mutual recursion loop....)
+- this tries all possibilities of selecting in case there is a nested let.
+- (point 5) we recompute many suggestions after trying each configuration even though some sections might be unchanged.
+- does not take into account where or why it (might have) failed. (e.g. if it fails because we try to use a function that doesn't exist and there is a configuration that does allow it we should only try those next)
+- prevent suggestions like above to be too aggressive (maybe instead of pulling x out of a let we need to push y into it.) 
+
+possible solutions: 
+- check if any of the sections contains a let. then it will consume at least 1 or more of the following definitions but never leave gaps.
+as in for the configuration only deselect x from the end and x_1,x_2,..x_n after the n sections with a let.
+- for point 5, maybe only give a subset of the type environment containing all the words in the section so results can be cashed?
+- have the ability to gather restrictions in our configuration for when e.g. a sub function uses a function that is unknown on the top level it must be included.
+
+ 
+
+
+
+maybe:
+for each let decide which of the inners belong to this let on indentation. then use usage patterns to try different selections. try all combinations
+  maybe scan sections on lets for partitioning. (if a nested let is found next one is for sure nor part of this let)
+
+
+note: the section after each let is part of it
+
