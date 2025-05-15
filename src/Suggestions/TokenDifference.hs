@@ -7,12 +7,12 @@ import Control.Monad.State as State
 import Data.Foldable (minimumBy)
 import Data.Function (on)
 import Data.Map as Map hiding (map)
+import Debug.Trace (trace)
 import GHC.ExecutionStack (Location (functionName))
 import Lexer.Tokens
 import Parser.ParserBase (WithSimplePos (WithSimplePos))
 import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
-import Debug.Trace (trace)
 
 data Action a
   = Keep a
@@ -32,19 +32,41 @@ getActionColor action = case action of
 
 recreateOriginalWithDifferencesShow :: [Action Token] -> String
 recreateOriginalWithDifferencesShow tokensIn =
-  let recreateOriginalShow2 :: Int -> [(Token, String, Action Token)] -> String
-      recreateOriginalShow2 indentLevel tokens = case tokens of
-        t1@(Newline, _,  _) : (Dedent, _, _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (t1 : tokensRest)
+  let recreateOriginalShow2 :: Int -> Int -> [(Token, String, Action Token)] -> String
+      recreateOriginalShow2 indentLevel originalIndentLevel tokens = case tokens of
+        t1@(Newline, _, _) : (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel (t1 : tokensRest)
+        t1@(Newline, _, _) : (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel  (originalIndentLevel- 1) (t1 : tokensRest)
+        t1@(Newline, _, _) : (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) (t1 : tokensRest)
         [] -> ""
-        (Newline, color, Add _) : tokensRest -> color ++ "newline\n" ++ resetColor ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
-        (Newline, _, _) : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
-        (Indent, _, _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) tokensRest
-        (Dedent, _, _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) tokensRest
-        (tok, color, _) : rpar@(Rpar, _, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ recreateOriginalShow2 indentLevel (rpar : tokensRest)
-        (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel tokensRest
-        (Lambda, color, _) : tokensRest -> color ++ showExact Lambda ++ resetColor ++ recreateOriginalShow2 indentLevel tokensRest
-        (tok, color, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel tokensRest
-   in recreateOriginalShow2 0 $ Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn
+        [(Newline, color, _)] -> ""
+        (Newline, color, action) : tokensRest ->
+          let indentDifference =  indentLevel - originalIndentLevel
+           in ( case action of
+                  Keep _ -> "\n"
+                  _ ->
+                    color
+                      ++ "newline\n"
+                      ++ resetColor
+              )
+                ++ stringRepeat (indentLevel - max 0 indentDifference) (showExact Indent)
+                ++ ( if indentDifference < 0
+                       then redColor
+                       else greenColor
+                   )
+                ++ stringRepeat (abs indentDifference) (map (const '▇') $ showExact Indent) -- TODO: fix this propperly
+                ++ resetColor
+                ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (Indent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) originalIndentLevel tokensRest
+        (Indent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel+ 1)  tokensRest
+        (Indent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) (originalIndentLevel + 1) tokensRest
+        (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel tokensRest
+        (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel  (originalIndentLevel- 1) tokensRest
+        (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) tokensRest
+        (tok, color, _) : rpar@(Rpar, _, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel (rpar : tokensRest)
+        (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (Lambda, color, _) : tokensRest -> color ++ showExact Lambda ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (tok, color, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+   in show tokensIn ++ "\n\n" ++ recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
 
 instance Show a => Show (Action a) where
   show (Keep a) = whiteColor ++ show a ++ resetColor
@@ -123,7 +145,7 @@ createTargetTokensFromExpr expr =
                   case expr2 of
                     (WithSimplePos _ _ (Application _ _)) -> Require Lpar : expr2Tokens ++ [Require Rpar]
                     _ -> expr2Tokens
-            return $ Optional Lpar (Just bracketId) : expr1Tokens ++ [Optional Indent (Just indentId), Optional Newline (Just indentId)] ++ argumentTokens ++ [Optional Rpar (Just bracketId), Optional Newline Nothing, Optional Dedent (Just indentId)] -- TODO: fix early dedent issue
+            return $ Optional Lpar (Just bracketId) : expr1Tokens ++ [Optional Indent (Just indentId), Optional Newline (Just indentId)] ++ argumentTokens ++ [Optional Rpar (Just bracketId), Optional Dedent (Just indentId)] -- TODO: fix early dedent issue
         (WithSimplePos _ _ (Label name)) ->
           return [Require (Name name)]
         (WithSimplePos _ _ (Int num)) ->
@@ -148,12 +170,17 @@ createTargetTokensFromExpr expr =
                 let nameToken = Require (Name functionName)
                 let argumentTokens = map (\name -> Require (Name name)) identifiers
                 exprTokens <- createTargetTokensFromExpr expr
-                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline]
+                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline, Optional Newline Nothing]
            in do
                 definitionTokens <- mapM (\(x, y, z) -> defitionToTokens x y z) definitions
                 inExpressionTokens <- createTargetTokensFromExpr inExpressions
                 firstIndentId <- getId
-                return $ [Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId), Require Let, Require Indent, Require Newline] ++ concat definitionTokens ++ [Require Dedent, Require In, Require Indent, Require Newline] ++ inExpressionTokens
+                return $
+                  [Require Indent, Require Newline, Require Let, Require Indent, Require Newline]
+                    ++ concat definitionTokens
+                    ++ [Require Dedent, Require In, Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId)]
+                    ++ inExpressionTokens
+                    ++ [Optional Dedent (Just firstIndentId), Require Dedent]
         _ -> undefined
 
 needsParentheses :: Expr -> Bool

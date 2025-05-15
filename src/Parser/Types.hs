@@ -66,6 +66,7 @@ data Type
   | FreshVar Int
   | TypeCon TypeCon
   | TypeArrow Type Type
+  | TypeError String
   -- TODO: add type applications
   deriving (Eq, Ord)
 
@@ -86,6 +87,7 @@ instance Show Type where
   show (FreshVar num) = "v" ++ show num
   show (TypeCon typeCon) = show typeCon
   show (TypeArrow typ1 typ2) = "(" ++ show typ1 ++ " -> " ++ show typ2 ++ ")"
+  show (TypeError str) = "[Type Error : " ++ str++ "]"
 
 type TypeVar = String
 

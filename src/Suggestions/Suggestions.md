@@ -30,6 +30,7 @@
   - [Indentation](#indentation)
       - [let parsing approach.](#let-parsing-approach)
         - [implementation details](#implementation-details)
+        - [making the let selection](#making-the-let-selection)
 
 # Suggestions
 in short suggestions are generated as follows. 
@@ -436,6 +437,7 @@ typenv: `plus :: Int -> Int -> Int`
 tokenStreams: 
 ```
 [[myvar, =, ...],
+ [fun2, x, y, =, ...],
  [plus, x, y, =, ...],
  [plus, x, y, =, ...]]
 ```
@@ -486,15 +488,12 @@ possible solutions:
 as in for the configuration only deselect x from the end and x_1,x_2,..x_n after the n sections with a let.
 - for point 5, maybe only give a subset of the type environment containing all the words in the section so results can be cashed?
 - have the ability to gather restrictions in our configuration for when e.g. a sub function uses a function that is unknown on the top level it must be included.
-
+- this does not work: maybe only figure out of the next section should belong to this let.
+because: we need to know if top levels are overwriten by a definition in a let.
  
 
 
 
-maybe:
-for each let decide which of the inners belong to this let on indentation. then use usage patterns to try different selections. try all combinations
-  maybe scan sections on lets for partitioning. (if a nested let is found next one is for sure nor part of this let)
-
-
-note: the section after each let is part of it
-
+##### making the let selection 
+for each let we encounter all the let ts with in minus the first n after each subsecton conaining a let where 
+1 <= n < length of let to the end of the list or next let. 

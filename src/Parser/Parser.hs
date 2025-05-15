@@ -10,6 +10,7 @@ import Lexer.Tokens
 import Parser.ParserBase
 import Parser.Types
 import Text.Megaparsec
+import Data.IntMap (size)
 
 rightAssociative :: (WithSimplePos a -> WithSimplePos a -> WithSimplePos a) -> WithSimplePos a -> [WithSimplePos a] -> WithSimplePos a
 rightAssociative constructor first (x1 : x2 : xs) = constructor first (rightAssociative constructor x1 (x2 : xs))
@@ -19,12 +20,27 @@ rightAssociative _ first [] = first
 liftFunToWithSimplePosFun :: (a -> a -> a) -> (WithSimplePos a -> WithSimplePos a -> WithSimplePos a)
 liftFunToWithSimplePosFun constructor (WithSimplePos start _ x1) (WithSimplePos _ end x2) = WithSimplePos start end (constructor x1 x2)
 
+
+processInternalTokens :: [TokenInfo] ->  [TokenInfo]
+processInternalTokens = reverse . processInternalTokens' 0 . reverse
+  where 
+    processInternalTokens' _ [] = []
+    processInternalTokens' n (x:xs)  = 
+      case (token_type x,n) of
+        (InternalAddIndentToPrevious,_) -> processInternalTokens' (n + 1)  xs 
+        (Indent,0) ->  x : processInternalTokens' n xs 
+        (Indent,n) ->  x : x :  processInternalTokens' (n - 1) xs 
+        _ -> x : processInternalTokens' n xs 
+
+
 splitIntoSections :: [TokenInfo] -> [[TokenInfo]]
 splitIntoSections listIn = map reverse $ splitIntoSections' [] 0 listIn
   where
     splitIntoSections' :: [TokenInfo] -> Int -> [TokenInfo] -> [[TokenInfo]]
     splitIntoSections' acc depth (tok1 : tok2 : list) = case (token_type tok1, token_type tok2, depth) of
-      (Newline, Indent, _) -> splitIntoSections' (tok1 : tok2 : acc) (depth + 1) (list)
+      (Newline, Indent, _) -> let (indents, remainingList) = span (\x -> token_type x==  Indent) list
+        in
+        splitIntoSections' (tok1 : tok2 : (indents ++ acc)) (depth + 1 + length indents) (remainingList)
       (Indent, _, _) -> splitIntoSections' (tok1 : acc) (depth + 1) (tok2 : list)
       (Dedent, _, 1) -> (tok1 : acc) : splitIntoSections' ([]) (depth-1) (tok2 : list)
       (Newline, _, 0) -> acc : splitIntoSections' ([tok1]) (depth) (tok2 : list)

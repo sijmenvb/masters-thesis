@@ -32,8 +32,8 @@ main = do
   case runLexer sourceString of
     Left errorMsg -> putStrLn errorMsg
     Right parsedTokens ->
-      let sections = sanitizeSections $ splitIntoSections parsedTokens
-      
+      let sections = sanitizeSections $ splitIntoSections $ processInternalTokens parsedTokens
+
           parsedMaybeSections = List.map (\section -> evalState (runParserT pSection fileName ( tokensToParsableString sourceString section)) ParserState { indentLevel = 0 } ) sections
           (parsedErrors, parsedSections) = partitionEithers parsedMaybeSections
           parseProblemsBundle = getParseProblems parsedMaybeSections sections
@@ -59,8 +59,9 @@ makeSuggestion state inferredTypes problembundle =
   let maybeErr = generateSuggestion state inferredTypes (fst problembundle)
    in case maybeErr of
         Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) ->
-          sequence_ 
-            [ putStrLn "did you mean:",
+          sequence_
+            $ print expectedTokens :
+             [ putStrLn "did you mean:",
               putStrLn fixString,
               putStrLn "--diff:--",
               putStrLn diffString,

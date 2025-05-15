@@ -11,18 +11,28 @@
 
 module Suggestions.Suggestions where
 
+import Control.Exception (throw)
+import Data.Array (Ix (range))
+import qualified Data.Bifunctor
 import Data.Foldable
+import Data.Function (on)
 import Data.IntMap (insert)
+import Data.List (groupBy, sortBy, sortOn)
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
 import Data.Tree (Tree (subForest))
 import Data.Void
 import Debug.Trace (trace)
-import GHC.Base (TyCon (TyCon))
+import GHC.Base (Alternative (empty), TyCon (TyCon))
 import GHC.ExecutionStack (Location (functionName))
-import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, token_type), recreateOriginalShow, showTokenInfoWithPosition)
+import Lexer.Tokens (Token (..), TokenInfo (TokenInfo, start_pos, token_type), recreateOriginalShow, showTokenInfoWithPosition)
 import Parser.Parser (buildLambdaExpression)
 import Parser.ParserBase
+  ( MyStream,
+    WithSimplePos (WithSimplePos),
+    liftTokenInfoToSimplePos,
+  )
+import qualified Parser.ParserBase as Lexer.Tokens.TokenInfo
 import Parser.Types
 import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
 import Text.Megaparsec (ParseErrorBundle, Stream (Token), between, errorBundlePretty)
@@ -121,9 +131,9 @@ generateSuggestion state typeEnv tokens =
               do
                 setTypeEnvironment (typeEnvWithArgs)
                 generateExpressionSuggestion typeGoal Nothing []
-        (suggestions, builderState) <- runSugesstionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
+        (suggestions, builderState) <- runSuggestionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
 
-        (expr, typ, _) <- trace ("Debug suggestions:" ++ show suggestions) $liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
+        (expr, typ, _) <- trace ("Debug suggestions:" ++ show suggestions ++ show tokens) $ liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
         let section = FunctionDefinition functionName arguments expr
         let (expectedTokens, _) = sectionToSuggestion section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
@@ -152,10 +162,11 @@ data SuggestionBuilderState = State
     getEnvironmentFromState :: TypeEnvironment,
     getFreshVarCounterFromState :: Int,
     getBranchCounterFromState :: Int
+    -- getLocalDefinitionTokensFromState :: [[TokenInfo]]
   }
   deriving (Show)
 
-newtype SuggestionBuilder a = RunState (SuggestionBuilderState -> (MaybeError a, SuggestionBuilderState))
+newtype SuggestionBuilder a = SuggestionBuilder {runState :: SuggestionBuilderState -> (MaybeError a, SuggestionBuilderState)}
 
 instance Functor SuggestionBuilder where
   fmap :: (a -> b) -> SuggestionBuilder a -> SuggestionBuilder b
@@ -165,7 +176,7 @@ instance Functor SuggestionBuilder where
 
 instance Applicative SuggestionBuilder where
   pure :: a -> SuggestionBuilder a
-  pure a = RunState (\state -> (Justt a, state))
+  pure a = SuggestionBuilder {runState = \state -> (Justt a, state)}
 
   (<*>) :: SuggestionBuilder (a -> b) -> SuggestionBuilder a -> SuggestionBuilder b
   fm <*> am = do
@@ -177,50 +188,61 @@ instance Monad SuggestionBuilder where
   return :: a -> SuggestionBuilder a
   return = pure
   (>>=) :: SuggestionBuilder a -> (a -> SuggestionBuilder b) -> SuggestionBuilder b
-  (RunState run1) >>= f =
-    RunState
-      ( \state1 ->
-          let (ma, newState) = run1 state1
-           in case ma of
-                Justt a ->
-                  let (RunState run2) = f a
-                   in run2 newState
-                (Error str) -> (Error str, newState)
-      )
+  run1 >>= f =
+    SuggestionBuilder
+      { runState =
+          \state1 ->
+            let (ma, newState) = runState run1 state1
+             in case ma of
+                  Justt a ->
+                    let run2 = f a
+                     in runState run2 newState
+                  (Error str) -> (Error str, newState)
+      }
 
 instance MonadFail SuggestionBuilder where
   fail :: String -> SuggestionBuilder a
-  fail str = RunState (\state -> (Error str, state))
+  fail str = SuggestionBuilder {runState = \state -> (Error str, state)}
 
 instance FailMessage SuggestionBuilder where
   (<?>) :: SuggestionBuilder a -> String -> SuggestionBuilder a
-  (RunState run) <?> str =
-    RunState
-      ( \state ->
-          let (ma, newState) = run state
-           in ( ma <?> str,
-                newState
-              )
-      )
+  (run) <?> str =
+    SuggestionBuilder
+      { runState =
+          \state ->
+            let (ma, newState) = runState run state
+             in ( ma <?> str,
+                  newState
+                )
+      }
 
 instance Errorable SuggestionBuilder where
   liftError :: Maybe a -> SuggestionBuilder a
   liftError (Just a) = pure a
   liftError Nothing = fail ""
 
-runSugesstionBuilder :: Int -> SuggestionBuilder a -> [TokenInfo] -> MaybeError (a, SuggestionBuilderState)
-runSugesstionBuilder freshVarCounter (RunState run) tokens =
-  let (ma, state) = run State {getTokensFromState = tokens, getEnvironmentFromState = Map.empty, getFreshVarCounterFromState = freshVarCounter, getBranchCounterFromState = 0}
+runSuggestionBuilder :: Int -> SuggestionBuilder a -> [TokenInfo] -> MaybeError (a, SuggestionBuilderState)
+runSuggestionBuilder freshVarCounter run tokens =
+  let (ma, state) =
+        runState
+          run
+          State
+            { getTokensFromState = tokens,
+              getEnvironmentFromState = Map.empty,
+              getFreshVarCounterFromState = freshVarCounter,
+              getBranchCounterFromState = 0
+              -- getLocalDefinitionTokensFromState = []
+            }
    in do
         a <- ma
         return (a, state)
 
 getSuggestionBuilderState :: SuggestionBuilder SuggestionBuilderState
 getSuggestionBuilderState =
-  RunState (\state -> (Justt state, state))
+  SuggestionBuilder {runState = \state -> (Justt state, state)}
 
 setSuggestionBuilderState :: SuggestionBuilderState -> SuggestionBuilder ()
-setSuggestionBuilderState state = RunState (\_ -> (Justt (), state))
+setSuggestionBuilderState state = SuggestionBuilder {runState = \_ -> (Justt (), state)}
 
 getTypeEnvironment :: SuggestionBuilder TypeEnvironment
 getTypeEnvironment = getEnvironmentFromState <$> getSuggestionBuilderState
@@ -230,6 +252,14 @@ setTypeEnvironment env = do
   state <- getSuggestionBuilderState
   setSuggestionBuilderState state {getEnvironmentFromState = env}
 
+{- getLocalDefinitionTokens :: SuggestionBuilder [[TokenInfo]]
+getLocalDefinitionTokens = getLocalDefinitionTokensFromState <$> getSuggestionBuilderState
+
+setLocalDefinitionTokens :: [[TokenInfo]] -> SuggestionBuilder ()
+setLocalDefinitionTokens env = do
+  state <- getSuggestionBuilderState
+  setSuggestionBuilderState state {getLocalDefinitionTokensFromState = env}
+ -}
 getFreshVarCounter :: SuggestionBuilder Int
 getFreshVarCounter = getFreshVarCounterFromState <$> getSuggestionBuilderState
 
@@ -282,41 +312,43 @@ setTokens tokens = do
 
 popToken :: SuggestionBuilder TokenInfo
 popToken =
-  RunState
-    ( \state -> case getTokensFromState state of
-        [] -> (Error "no items to pop", state)
-        (x : xs) -> (Justt x, state {getTokensFromState = xs})
-    )
+  SuggestionBuilder
+    { runState =
+        \state -> case getTokensFromState state of
+          [] -> (Error "no items to pop", state)
+          (x : xs) -> (Justt x, state {getTokensFromState = xs})
+    }
 
 hasTokens :: SuggestionBuilder Bool
 hasTokens =
-  RunState
-    ( \state -> case getTokensFromState state of
-        [] -> (Justt False, state)
-        _ -> (Justt True, state)
-    )
+  SuggestionBuilder
+    { runState =
+        \state -> case getTokensFromState state of
+          [] -> (Justt False, state)
+          _ -> (Justt True, state)
+    }
 
--- try :: SuggestionBuilder a -> SuggestionBuilder a -> SuggestionBuilder a
 try :: SuggestionBuilder a -> SuggestionBuilder a -> SuggestionBuilder a
-try (RunState run1) (RunState run2) =
-  RunState
-    ( \state -> case run1 state of
-        res@(Justt _, _) -> res
-        (Error str, _) ->
-          -- trace str $
-          run2 (state {getBranchCounterFromState = getBranchCounterFromState state + 1})
-    )
+try run1 run2 =
+  SuggestionBuilder
+    { runState =
+        \state -> case runState run1 state of
+          res@(Justt _, _) -> res
+          (Error str, _) ->
+            -- trace str $
+            runState run2 (state {getBranchCounterFromState = getBranchCounterFromState state + 1})
+    }
+removeWhitespace :: [TokenInfo] -> [TokenInfo]
+removeWhitespace [] = []
+removeWhitespace ((TokenInfo Indent _ _ _) : xs) = removeWhitespace xs
+removeWhitespace ((TokenInfo Dedent _ _ _) : xs) = removeWhitespace xs
+removeWhitespace ((TokenInfo Newline _ _ _) : xs) = removeWhitespace xs
+removeWhitespace ((TokenInfo NewlineAfterComment _ _ _) : xs) = removeWhitespace xs
+removeWhitespace ((TokenInfo (Comment _) _ _ _) : xs) = removeWhitespace xs
+removeWhitespace list = list
 
 consumeWhitespace :: SuggestionBuilder ()
-consumeWhitespace =
-  let removeWhitespace [] = []
-      removeWhitespace ((TokenInfo Indent _ _ _) : xs) = removeWhitespace xs
-      removeWhitespace ((TokenInfo Dedent _ _ _) : xs) = removeWhitespace xs
-      removeWhitespace ((TokenInfo Newline _ _ _) : xs) = removeWhitespace xs
-      removeWhitespace ((TokenInfo NewlineAfterComment _ _ _) : xs) = removeWhitespace xs
-      removeWhitespace ((TokenInfo (Comment _) _ _ _) : xs) = removeWhitespace xs
-      removeWhitespace list = list
-   in do
+consumeWhitespace =do
         tokens <- getTokens
         setTokens $ removeWhitespace tokens
 
@@ -326,6 +358,28 @@ getToken x = do
   if hasTok
     then popToken
     else x
+
+-- | takes an string or an error in case the list is empty.
+--
+-- Tries all suggestion builders will return the first success.
+--
+-- gives the first error if ALL fail.
+firstSuccessful :: String -> [SuggestionBuilder a] -> SuggestionBuilder a -- (auto-generated with the help of ChatGPT (needed small fixes))
+firstSuccessful emptyListErrorStr [] = fail emptyListErrorStr
+firstSuccessful _ (f : fs) =
+  SuggestionBuilder
+    { runState = \s ->
+        let (result, newState) = runState f s
+         in case result of
+              Justt _ -> (result, newState)
+              Error _ -> trace ("###@$@#$@#$@#$@#$@ found error" ++ show (length fs)) $ tryRest result fs s
+    }
+  where
+    tryRest firstFailure [] originalState = (firstFailure, originalState)
+    tryRest firstFailure (g : gs) originalState =
+      case runState g originalState of
+        (Justt val, newState) -> (Justt val, newState)
+        (Error _, _) -> tryRest firstFailure gs originalState
 
 cycleExpression :: WithSimplePos Expr -> WithSimplePos Expr
 cycleExpression exprIn =
@@ -357,7 +411,7 @@ dropTypeArguments2 arguments typ = do
   typeEnv <- getTypeEnvironment
   case (arguments, typ) of
     ([], t) -> return (t, typeEnv)
-    (_,FreshVar _ ) -> 
+    (_, FreshVar _) ->
       do
         freshVar1 <- getFreshVar
         freshVar2 <- getFreshVar
@@ -365,9 +419,9 @@ dropTypeArguments2 arguments typ = do
         let sub = Map.insert typ newtyp Map.empty
         applySubstitutionToSuggestionBuilder sub
         dropTypeArguments2 arguments newtyp
-    (identifier : xs, TypeArrow a b) -> do 
+    (identifier : xs, TypeArrow a b) -> do
       setTypeEnvironment (Map.insert identifier a typeEnv)
-      dropTypeArguments2 xs  b
+      dropTypeArguments2 xs b
     (identifier : xs, _) -> fail $ "Cannot take an argument from the type " ++ show typ ++ " to assign to " ++ show identifier ++ "!"
 
 generateFunctionSuggestion :: Type -> SuggestionBuilder (Pattern, [LabelIdentifier], WithSimplePos Expr, Type)
@@ -376,7 +430,7 @@ generateFunctionSuggestion goal =
         tok <- getToken (fail $ "Not Enough tokens to satisfy goal:\n" ++ show goal ++ "\n!")
         case tok of
           (TokenInfo (Name name) _ start end) -> return name
-          _ -> fail $ "name is not next found: " ++ show tok ++ " instead"
+          _ -> fail $ "name is not next, found: " ++ show tok ++ " instead"
 
       many :: SuggestionBuilder a -> SuggestionBuilder [a]
       many x =
@@ -408,16 +462,19 @@ generateFunctionSuggestion goal =
 
         freshVars <- getFreshVars (length arguments)
         let pairs = zip arguments freshVars
-        startingTypeEnv <- trace ("fresh vars:" ++ show freshVars) $getTypeEnvironment
+        startingTypeEnv <- trace ("fresh vars:" ++ show freshVars) $ getTypeEnvironment
         let typeEnvWithFreshVars = foldl (\typeEnv (argumentName, argumentType) -> Map.insert argumentName argumentType (Map.delete argumentName typeEnv)) startingTypeEnv pairs
         setTypeEnvironment typeEnvWithFreshVars
 
         (expressionGoal, updatedTypeEnv) <- trace ("goal:" ++ show goal) $ dropTypeArguments2 arguments goal
-        trace ("expressionGoal:" ++ show expressionGoal) $ setTypeEnvironment updatedTypeEnv
+        trace ("expressionGoal:" ++ show expressionGoal ) $ setTypeEnvironment updatedTypeEnv
 
         functionBodyCandidates <- generateExpressionSuggestion expressionGoal Nothing []
+        
 
-        trace ("functionBodyCandidates:" ++ show functionBodyCandidates) $ findBestCandidate
+        -- add back function variables 
+        -- trace ("functionBodyCandidates:" ++ show functionBodyCandidates) $
+        findBestCandidate
           goal
           functionBodyCandidates
           (buildReturnType arguments)
@@ -521,25 +578,121 @@ generateExpressionSuggestion goal currentProcessType accumulator =
         go candidates
 
       processLet :: (Int, Int) -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
-      processLet start = do
-        consumeWhitespace
-        freshVar <- getFreshVar
-        (letFunctionName, arguments, functionExpr, name) <- generateFunctionSuggestion freshVar
-        consumeWhitespace
-        consumeTokenIfExists In
-        consumeWhitespace
-        -- TODO: add function type to environment
-        candidates <- trace ("function name in let:" ++ letFunctionName) $ generateExpressionSuggestion goal Nothing []
-        findBestCandidate
-          goal
-          candidates
-          pure
-          ( \expr typ sub -> do
-              applySubstitutionToSuggestionBuilder sub
-              currentState <- getSuggestionBuilderState
-              let (WithSimplePos _ end _) = expr 
-              return (WithSimplePos start end $ LetExpression [(letFunctionName, arguments, functionExpr)] expr, typ, currentState)
-          )
+      processLet start =
+        let {- processLocalDefinitions :: [[TokenInfo]] -> SuggestionBuilder [(Pattern, [LabelIdentifier], WithSimplePos Expr, Type)]
+            processLocalDefinitions list = mapM renameMe list
+
+            renameMe :: [TokenInfo] -> SuggestionBuilder (Pattern, [LabelIdentifier], WithSimplePos Expr, Type)
+            renameMe tok = do
+              setTokens tok
+              freshVar <- getFreshVar
+              generateFunctionSuggestion freshVar -}
+
+            generateLetSuggestion :: [([TokenInfo], Maybe [([TokenInfo], Bool)])] -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
+            generateLetSuggestion localDefConfigs =
+              let appendIfJust :: [TokenInfo] -> Maybe [([TokenInfo], Bool)] -> [TokenInfo]
+                  appendIfJust base maybeExtra =
+                    base ++ case maybeExtra of
+                      Just extras -> concatMap fst extras
+                      Nothing -> []
+               in do
+                    -- TODO: make sure that input variables of a local def are overwritten in the type environment and removed for subsequent local defs but restrictions on the rest should remain
+                    oldTypeEnv <- getTypeEnvironment
+
+                    let firstName :: [TokenInfo] -> String
+                        firstName [] = "ERROR no name found!"
+                        firstName (TokenInfo (Name s) _ _ _ : xs) = s
+                        firstName (_ : xs) = firstName xs
+
+                        calculateNewTypeEnv :: SuggestionBuilder (TypeEnvironment)
+                        calculateNewTypeEnv =
+                          SuggestionBuilder
+                            { runState =
+                                \env ->
+                                  let currentTypeEnv = getEnvironmentFromState env
+                                      newEnv = env {getFreshVarCounterFromState = getFreshVarCounterFromState env + 1}
+              
+                                      allEnvs = map (\(tokens, maybeContinuationTokens) -> env {getTokensFromState = removeWhitespace $ appendIfJust tokens maybeContinuationTokens, getEnvironmentFromState = finalEnv}) localDefConfigs
+                                      allNames = map (\(tokens, _) -> firstName tokens) localDefConfigs
+                                      freshVar = FreshVar $ getFreshVarCounterFromState env
+                                      generateFun = runState (generateFunctionSuggestion freshVar)
+                                      results = zip allNames $ map (fst . generateFun) allEnvs
+                                      finalEnv =
+                                        foldr
+                                          ( \(name, maybe) env ->  Map.insert name (case maybe of
+                                              Justt (_, _, _, typ) -> trace ("#-#-#-#-#-#-#-#-#-" ++ show name ++ show typ) typ
+                                              Error str -> trace str (TypeError str) ) env
+                                          )
+                                          currentTypeEnv
+                                          results
+                                   in (Justt $ finalEnv, env)
+                            }
+                    {- foldr
+                      ( \(tokens, rest) acc -> do
+                          (currentEnv) <- acc
+                          (finalTypeEnv) <- calculateNewTypeEnv -- some lazy evaluation magic here
+                          setTypeEnvironment finalTypeEnv --TODO: this doesn't work!!!!!!!! (infinite loop)
+                          setTokens (appendIfJust tokens rest)
+                          consumeWhitespace
+                          freshGoal <- getFreshVar
+                          let functionName = "hi"
+                          (_, _, _, typ) <- generateFunctionSuggestion freshGoal
+                          remainder <- getTokens
+                          return (Map.insert functionName typ currentEnv)
+                      )
+                      (pure (oldTypeEnv))
+                      localDefConfigs -}
+
+                    let localDefsAndRemainingTokens :: SuggestionBuilder ([(Pattern, [LabelIdentifier], WithSimplePos Expr)], [TokenInfo])
+                        localDefsAndRemainingTokens =
+                          foldr
+                            ( \(tokens, rest) acc -> do
+                                (patterns, remainderAcc) <- trace ("generating suggestion for " ++ show (head tokens)) $ acc
+                                setTokens (appendIfJust tokens rest)
+                                consumeWhitespace
+                                freshGoal <- getFreshVar
+                                (functionName, arguments, expression, typ) <- trace ("###############trying for: " ++ show (appendIfJust tokens rest)) $ generateFunctionSuggestion freshGoal
+                                remainder <- trace ("###############generated suggestion for " ++ functionName ++ " : " ++ show expression) $ getTokens
+
+                                return
+                                  ( (functionName, arguments, expression) : patterns,
+                                    case remainderAcc of
+                                      [] -> trace ("###############keeping: " ++ show functionName) remainder
+                                      _ -> trace ("###############discarding: " ++ show functionName) $ remainderAcc -- TODO: make test case work with nested lets.
+                                  )
+                            )
+                            (pure ([], []))
+                            localDefConfigs
+
+                    newTypeEnv <- trace ("group" ++ show (localDefConfigs)) $ calculateNewTypeEnv
+                    setTypeEnvironment newTypeEnv
+                    (localDefs, remainingTokens) <- localDefsAndRemainingTokens
+                    trace ("\nremainingTokens: " ++ show remainingTokens) $ setTokens remainingTokens
+                    consumeWhitespace
+                    consumeTokenIfExists In
+                    consumeWhitespace
+
+                    candidates <- generateExpressionSuggestion goal Nothing []
+                    findBestCandidate
+                      goal
+                      candidates
+                      pure
+                      ( \expr typ sub -> do
+                          applySubstitutionToSuggestionBuilder sub
+                          currentState <- getSuggestionBuilderState
+                          let (WithSimplePos _ end _) = expr
+                          return (WithSimplePos start end $ LetExpression localDefs expr, typ, currentState)
+                      )
+         in do
+              consumeWhitespace
+              tokens <- getTokens
+              let localDefinitions = splitSections tokens
+
+              let localDefConfigs = trace ("local defs:" ++ show localDefinitions) $getLocalDefConfigs localDefinitions
+
+              let configs = map generateLetSuggestion localDefConfigs
+
+              firstSuccessful "error! let contrains No definitions" configs
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
@@ -717,3 +870,83 @@ insertIntoExpressionAtIndex indexIn expr originalExpr =
    in do
         newArguments <- insertAtPos indexIn expr arguments
         return $ buildExpressionFromArguments function newArguments
+
+{- populateLocalDefinitionTokens :: SuggestionBuilder ()
+populateLocalDefinitionTokens = do
+  localDefs <- getLocalDefinitionTokens
+  case localDefs of
+    [] -> do
+      tokenStream <- getTokens
+      setLocalDefinitionTokens $ trace ("tokenSections" ++ show (splitSections tokenStream)) (splitSections tokenStream)
+      setTokens []
+    _ -> return () -}
+
+-- the bool is to signify if a section contains a let
+splitSections :: [TokenInfo] -> [([TokenInfo], Bool)]
+splitSections input = map (Data.Bifunctor.first reverse) (splitSections2 [] False input) -- TODO: see if we can get rid of the reverse
+  where
+    splitSections2 :: [TokenInfo] -> Bool -> [TokenInfo] -> [([TokenInfo], Bool)]
+    splitSections2 acc boolAcc [] = [(acc, boolAcc)]
+    splitSections2 acc boolAcc (tok@(TokenInfo Newline _ _ _) : tokens) =
+      let removeIndent (TokenInfo Indent _ _ _ : tokens) = removeIndent tokens
+          removeIndent (TokenInfo Dedent _ _ _ : tokens) = removeIndent tokens
+          removeIndent x = x
+
+          checkFunctionPattern (TokenInfo (Name _) _ _ _ : TokenInfo EqualsSign _ _ _ : tokens) = True
+          checkFunctionPattern (TokenInfo (Name _) _ _ _ : tokens) = checkFunctionPattern tokens
+          checkFunctionPattern _ = False
+       in if checkFunctionPattern $ removeIndent tokens
+            then (acc, boolAcc) : splitSections2 [] False tokens
+            else splitSections2 (tok : acc) boolAcc tokens
+    splitSections2 acc boolAcc (tok@(TokenInfo Let _ _ _) : tokens) = splitSections2 (tok : acc) True tokens
+    splitSections2 acc boolAcc (tok : tokens) = splitSections2 (tok : acc) boolAcc tokens
+
+-- takes a list of possible local definitions with bools indicating if they contain a let.
+-- will return a list ofconfigurations where each configuration is a list of definitions (definition is [TokenInfo]) with a maybe continuation for nested lets
+getLocalDefConfigs :: [([TokenInfo], Bool)] -> [[([TokenInfo], Maybe [([TokenInfo], Bool)])]]
+getLocalDefConfigs localDefs@((firstLocalDef@(name : rst), containsLet) : rest) =
+  let initialIndent = snd $ start_pos name
+      restrictions list =
+        let restrictions' _ [] = []
+            restrictions' acc (True : rest) = (1, acc) : restrictions' 0 rest
+            restrictions' acc (False : rest) = restrictions' (acc + 1) rest
+         in reverse $ restrictions' 0 $ reverse $ map snd localDefs
+
+      possibleConfigs = mapM range (restrictions localDefs) -- range turns e.g (1,4) into [1,2,3,4] and mapM is equivalent to sequence . map
+      getIndent :: [TokenInfo] -> Int
+      getIndent (name : _) = snd $ start_pos name
+      getIndent [] = 0
+
+      indentDifferences = map (Data.Bifunctor.first ((\x -> abs (x - initialIndent)) . getIndent)) localDefs
+
+      keepMask :: [(a, Bool)] -> [Int] -> [Bool]
+      keepMask list ints =
+        let keepMask' _ [] _ = []
+            keepMask' _ ((x, True) : xs) [] = error "ERROR for developer: found a let without config THIS SHOULD NEVER HAPPEN!"
+            keepMask' 0 ((x, False) : xs) ints = True : keepMask' 0 xs ints
+            keepMask' 0 ((x, True) : xs) (currentAmount : ints) = True : keepMask' currentAmount xs ints
+            keepMask' toIgnore ((x, False) : xs) ints = False : keepMask' (toIgnore - 1) xs ints
+            keepMask' toIgnore ((x, True) : xs) (currentAmount : ints) = False : keepMask' currentAmount xs ints
+         in keepMask' 0 list ints
+
+      groupByFlag :: [(a, Bool)] -> [[(a, Bool)]]
+      groupByFlag =
+        let groupByFlag' acc [] = [acc]
+            groupByFlag' acc ((a, True) : xs) = acc : groupByFlag' [(a, True)] xs
+            groupByFlag' acc ((a, False) : xs) = groupByFlag' ((a, False) : acc) xs
+         in map reverse . filter (not . null) . groupByFlag' []
+
+      configFilter :: (Show a) => ([(a, Bool)] -> b) -> [(a, Bool)] -> [Int] -> [(a, Maybe b)]
+      configFilter fun defs ints =
+        let groups = groupByFlag $ zip (map fst defs) (keepMask defs ints)
+         in map
+              ( \group -> case group of
+                  [x] -> (fst x, Nothing)
+                  (x : xs) -> (fst x, Just (fun xs))
+              )
+              groups
+
+      getWeight ints = sum $ map fst $ configFilter (\_ -> ()) indentDifferences ints
+
+      sortedConfigs = sortOn ((*) (-1) . getWeight) possibleConfigs
+   in trace ("debugging" ++ show (localDefs)) $ map (configFilter id localDefs) sortedConfigs

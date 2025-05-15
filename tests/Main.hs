@@ -122,3 +122,23 @@ makeSuggestion state inferredTypes problembundle =
    in case maybeErr of
         Justt (expectedTokens, fixString, diffString, typ, numberOfBranches) -> fixString ++ ", " ++ show typ
         Error str -> concat ["Problem generating suggestion for " ++ show (getNameFromProblem $ snd problembundle), str, "------------------------------------"]
+
+
+
+{- 
+
+good test cases todo:
+
+flipNum2 x y = 
+    let 
+        fun a b = plus a b
+            var = let 
+                plus x y = x in x
+        vare = 5
+    in
+        5)
+
+
+
+
+-}
