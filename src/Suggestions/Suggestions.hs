@@ -8,6 +8,7 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 {-# HLINT ignore "Redundant return" #-}
+{-# HLINT ignore "Replace case with maybe" #-}
 
 module Suggestions.Suggestions where
 
@@ -338,6 +339,7 @@ try run1 run2 =
             -- trace str $
             runState run2 (state {getBranchCounterFromState = getBranchCounterFromState state + 1})
     }
+
 removeWhitespace :: [TokenInfo] -> [TokenInfo]
 removeWhitespace [] = []
 removeWhitespace ((TokenInfo Indent _ _ _) : xs) = removeWhitespace xs
@@ -348,9 +350,9 @@ removeWhitespace ((TokenInfo (Comment _) _ _ _) : xs) = removeWhitespace xs
 removeWhitespace list = list
 
 consumeWhitespace :: SuggestionBuilder ()
-consumeWhitespace =do
-        tokens <- getTokens
-        setTokens $ removeWhitespace tokens
+consumeWhitespace = do
+  tokens <- getTokens
+  setTokens $ removeWhitespace tokens
 
 getToken :: SuggestionBuilder TokenInfo -> SuggestionBuilder TokenInfo
 getToken x = do
@@ -467,12 +469,11 @@ generateFunctionSuggestion goal =
         setTypeEnvironment typeEnvWithFreshVars
 
         (expressionGoal, updatedTypeEnv) <- trace ("goal:" ++ show goal) $ dropTypeArguments2 arguments goal
-        trace ("expressionGoal:" ++ show expressionGoal ) $ setTypeEnvironment updatedTypeEnv
+        trace ("expressionGoal:" ++ show expressionGoal) $ setTypeEnvironment updatedTypeEnv
 
         functionBodyCandidates <- generateExpressionSuggestion expressionGoal Nothing []
-        
 
-        -- add back function variables 
+        -- add back function variables
         -- trace ("functionBodyCandidates:" ++ show functionBodyCandidates) $
         findBestCandidate
           goal
@@ -505,6 +506,10 @@ findBestCandidate goal candidates typeTransform suggestionBuilderToTry =
             -- no arguments fit
             fail "no arguments fit"
    in plugInArgument candidates
+
+safeLast :: [a] -> Maybe a
+safeLast [] = Nothing
+safeLast xs = Just (last xs)
 
 -- takes a target type, a maybe in case  we are currently building a function and a list of the candidates found thus far.
 generateExpressionSuggestion :: Type -> Maybe Type -> [Candidate] -> SuggestionBuilder [Candidate]
@@ -604,69 +609,55 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                         firstName (TokenInfo (Name s) _ _ _ : xs) = s
                         firstName (_ : xs) = firstName xs
 
-                        calculateNewTypeEnv :: SuggestionBuilder (TypeEnvironment)
+                        calculateNewTypeEnv :: SuggestionBuilder ([(LabelIdentifier, (Pattern, [LabelIdentifier], WithSimplePos Expr))], [TokenInfo], TypeEnvironment)
                         calculateNewTypeEnv =
                           SuggestionBuilder
                             { runState =
                                 \env ->
                                   let currentTypeEnv = getEnvironmentFromState env
                                       newEnv = env {getFreshVarCounterFromState = getFreshVarCounterFromState env + 1}
-              
+
                                       allEnvs = map (\(tokens, maybeContinuationTokens) -> env {getTokensFromState = removeWhitespace $ appendIfJust tokens maybeContinuationTokens, getEnvironmentFromState = finalEnv}) localDefConfigs
                                       allNames = map (\(tokens, _) -> firstName tokens) localDefConfigs
                                       freshVar = FreshVar $ getFreshVarCounterFromState env
                                       generateFun = runState (generateFunctionSuggestion freshVar)
                                       results = zip allNames $ map (fst . generateFun) allEnvs
-                                      finalEnv =
+                                      states = map (snd . generateFun) allEnvs
+                                      (list, finalEnv) =
                                         foldr
-                                          ( \(name, maybe) env ->  Map.insert name (case maybe of
-                                              Justt (_, _, _, typ) -> trace ("#-#-#-#-#-#-#-#-#-" ++ show name ++ show typ) typ
-                                              Error str -> trace str (TypeError str) ) env
+                                          ( \(name, maybe) (expressions, env) ->
+                                              ( case maybe of
+                                                  Justt (a, b, c, typ) -> (name, (a, b, c)) : expressions
+                                                  _ -> expressions,
+                                                Map.insert
+                                                  name
+                                                  ( case maybe of
+                                                      Justt (_, _, _, typ) -> trace ("#-#-#-#-#-#-#-#-#-" ++ show name ++ show typ) typ
+                                                      Error str -> trace str (TypeError str)
+                                                  )
+                                                  env
+                                              )
                                           )
-                                          currentTypeEnv
+                                          ([], currentTypeEnv)
                                           results
-                                   in (Justt $ finalEnv, env)
+                                   in ( Justt
+                                          ( list,
+                                            case safeLast states of
+                                              Just stat -> getTokensFromState stat
+                                              Nothing -> [],
+                                            finalEnv
+                                          ),
+                                        env
+                                      )
                             }
-                    {- foldr
-                      ( \(tokens, rest) acc -> do
-                          (currentEnv) <- acc
-                          (finalTypeEnv) <- calculateNewTypeEnv -- some lazy evaluation magic here
-                          setTypeEnvironment finalTypeEnv --TODO: this doesn't work!!!!!!!! (infinite loop)
-                          setTokens (appendIfJust tokens rest)
-                          consumeWhitespace
-                          freshGoal <- getFreshVar
-                          let functionName = "hi"
-                          (_, _, _, typ) <- generateFunctionSuggestion freshGoal
-                          remainder <- getTokens
-                          return (Map.insert functionName typ currentEnv)
-                      )
-                      (pure (oldTypeEnv))
-                      localDefConfigs -}
+                
+                    
 
-                    let localDefsAndRemainingTokens :: SuggestionBuilder ([(Pattern, [LabelIdentifier], WithSimplePos Expr)], [TokenInfo])
-                        localDefsAndRemainingTokens =
-                          foldr
-                            ( \(tokens, rest) acc -> do
-                                (patterns, remainderAcc) <- trace ("generating suggestion for " ++ show (head tokens)) $ acc
-                                setTokens (appendIfJust tokens rest)
-                                consumeWhitespace
-                                freshGoal <- getFreshVar
-                                (functionName, arguments, expression, typ) <- trace ("###############trying for: " ++ show (appendIfJust tokens rest)) $ generateFunctionSuggestion freshGoal
-                                remainder <- trace ("###############generated suggestion for " ++ functionName ++ " : " ++ show expression) $ getTokens
-
-                                return
-                                  ( (functionName, arguments, expression) : patterns,
-                                    case remainderAcc of
-                                      [] -> trace ("###############keeping: " ++ show functionName) remainder
-                                      _ -> trace ("###############discarding: " ++ show functionName) $ remainderAcc -- TODO: make test case work with nested lets.
-                                  )
-                            )
-                            (pure ([], []))
-                            localDefConfigs
-
-                    newTypeEnv <- trace ("group" ++ show (localDefConfigs)) $ calculateNewTypeEnv
+                    (expressions,remainingTokens , newTypeEnv) <- trace ("group" ++ show (localDefConfigs)) $ calculateNewTypeEnv
+                    let localDefs = map snd expressions
+                    
                     setTypeEnvironment newTypeEnv
-                    (localDefs, remainingTokens) <- localDefsAndRemainingTokens
+                    --(_, remainingTokensOld) <- localDefsAndRemainingTokens
                     trace ("\nremainingTokens: " ++ show remainingTokens) $ setTokens remainingTokens
                     consumeWhitespace
                     consumeTokenIfExists In
@@ -688,7 +679,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
               tokens <- getTokens
               let localDefinitions = splitSections tokens
 
-              let localDefConfigs = trace ("local defs:" ++ show localDefinitions) $getLocalDefConfigs localDefinitions
+              let localDefConfigs = trace ("local defs:" ++ show localDefinitions) $ getLocalDefConfigs localDefinitions
 
               let configs = map generateLetSuggestion localDefConfigs
 
