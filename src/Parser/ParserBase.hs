@@ -33,6 +33,7 @@ data WithSimplePos a = WithSimplePos
     end_pos :: (Int, Int),
     value :: a
   }
+  deriving (Eq)
 
 instance Show a => Show (WithSimplePos a) where
   show :: Show a => WithSimplePos a -> String

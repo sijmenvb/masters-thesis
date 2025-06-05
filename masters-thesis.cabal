@@ -83,6 +83,7 @@ library
     , text
     , utf8-string  >=1
     , ansi-terminal
+    
 
   -- Directories containing source files.
   hs-source-dirs:     src
@@ -140,4 +141,5 @@ test-suite my-tests
                   , ansi-terminal
                   , hspec       
                   , masters-thesis
+                  , raw-strings-qq
   default-language: Haskell2010

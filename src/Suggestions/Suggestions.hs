@@ -13,14 +13,15 @@
 module Suggestions.Suggestions where
 
 import Control.Exception (throw)
+import Control.Monad (foldM_)
 import Data.Array (Ix (range))
 import qualified Data.Bifunctor
 import Data.Foldable
 import Data.Function (on)
-import Data.IntMap (insert)
 import Data.List (groupBy, sortBy, sortOn)
 import qualified Data.Map as Map
 import Data.Maybe (mapMaybe)
+import qualified Data.Text.Internal.Fusion.Size as Map
 import Data.Tree (Tree (subForest))
 import Data.Void
 import Debug.Trace (trace)
@@ -36,7 +37,8 @@ import Parser.ParserBase
 import qualified Parser.ParserBase as Lexer.Tokens.TokenInfo
 import Parser.Types
 import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
-import Text.Megaparsec (ParseErrorBundle, Stream (Token), between, errorBundlePretty)
+import qualified System.IO.Error as Map
+import Text.Megaparsec (MonadParsec (token), ParseErrorBundle, Stream (Token), between, errorBundlePretty)
 import TypeInference.TypeInference
   ( Errorable (..),
     FailMessage (..),
@@ -44,9 +46,11 @@ import TypeInference.TypeInference
     Substitution,
     applySubstitution,
     applySubstitutionToTypeEnvironment,
+    freshVar,
     generateFreshVars,
     mostGeneralUnifier,
   )
+import Text.Megaparsec.Byte (string)
 
 indexedMap :: (Int -> a -> b) -> [a] -> [b]
 indexedMap f xs = zipWith f [0 ..] xs
@@ -125,21 +129,20 @@ generateSuggestion state typeEnv tokens =
                   return $ TypeArrow argType resultType
          in go args
    in do
-        (typeGoal, typeEnvWithArgs) <- case Map.lookup functionName typeEnv of
+        (typeGoal, updatedTypeEnv) <- case Map.lookup functionName typeEnv of
           Just x -> dropTypeArguments arguments typeEnv x
           Nothing -> Justt (FreshVar $ state + length argumentTypeVars, Map.union argumentTypeVars typeEnv)
         let builder =
               do
-                setTypeEnvironment (typeEnvWithArgs)
-                generateExpressionSuggestion typeGoal Nothing []
-        (suggestions, builderState) <- runSuggestionBuilder (state + length argumentTypeVars + 1) builder expressionTokens
+                setTypeEnvironment $ Map.map (Map.singleton (Scope 0 0) . Const) updatedTypeEnv
+                generateFunctionSuggestion typeGoal
+        (suggestion, builderState) <- runSuggestionBuilder (state + length argumentTypeVars + 1) builder tokens
 
-        (expr, typ, _) <- trace ("Debug suggestions:" ++ show suggestions ++ show tokens) $ liftError (findFirstMatch typeGoal suggestions) <?> "Could not generate a suggestion that matches the goal: " ++ show typeGoal
-        let section = FunctionDefinition functionName arguments expr
+        let (functionName, arguments2, body, finalType) = suggestion
+        let section = FunctionDefinition functionName arguments body
         let (expectedTokens, _) = sectionToSuggestion section
         let tokenList = map (\(TokenInfo tok _ _ _) -> tok) tokens
         let actionTokens = generateActions expectedTokens tokenList
-        finalType <- buildReturnType (getEnvironmentFromState builderState) arguments typ
         -- trace (show (getEnvironmentFromState builderState)) $
         return
           ( expectedTokens,
@@ -158,11 +161,40 @@ generateSuggestion state typeEnv tokens =
 
 -- <?> "could not generate a suggestion for " ++ show name ++ " " ++ show arguments ++ " " ++ show expressionTokens
 
+type UUID = Type
+
+data TypePromise
+  = Const Type
+  | Function Depth (SuggestionBuilder ([TokenInfo], (Pattern, [LabelIdentifier], WithSimplePos Expr, Type))) UUID
+  | Result Type Pattern [LabelIdentifier] (WithSimplePos Expr) [TokenInfo] -- TODO: see what we actually need and make this smaller
+
+instance Eq TypePromise where
+  (Const t1) == (Const t2) = t1 == t2
+  (Function d1 _ u1) == (Function d2 _ u2) = d1 == d2 && u1 == u2
+  (Result t1 p1 l1 e1 toks1) == (Result t2 p2 l2 e2 toks2) =
+    t1 == t2 && p1 == p2 && l1 == l2 && e1 == e2 && toks1 == toks2
+  _ == _ = False
+instance Show TypePromise where
+  show (Const typ) = "Const: " ++ show typ
+  show (Function depth _ _) = "<function at depth " ++ show depth ++ ">"
+  show (Result typ _ _ _ _) = "Result: " ++ show typ
+
+--
+data Scope = Scope Depth Branch
+  deriving (Show, Ord, Eq)
+
+type SuggestionBuilderTypeEnvironment = Map.Map String (Map.Map Scope TypePromise)
+
+type Depth = Int
+
+type Branch = Int
+
 data SuggestionBuilderState = State
   { getTokensFromState :: [TokenInfo],
-    getEnvironmentFromState :: TypeEnvironment,
+    getEnvironmentFromState :: SuggestionBuilderTypeEnvironment,
     getFreshVarCounterFromState :: Int,
-    getBranchCounterFromState :: Int
+    getBranchCounterFromState :: Int,
+    getScopeFromState :: Scope -- depth followed by current branch
     -- getLocalDefinitionTokensFromState :: [[TokenInfo]]
   }
   deriving (Show)
@@ -231,8 +263,9 @@ runSuggestionBuilder freshVarCounter run tokens =
             { getTokensFromState = tokens,
               getEnvironmentFromState = Map.empty,
               getFreshVarCounterFromState = freshVarCounter,
-              getBranchCounterFromState = 0
+              getBranchCounterFromState = 0,
               -- getLocalDefinitionTokensFromState = []
+              getScopeFromState = Scope 0 0 -- depth followed by current branch
             }
    in do
         a <- ma
@@ -242,13 +275,27 @@ getSuggestionBuilderState :: SuggestionBuilder SuggestionBuilderState
 getSuggestionBuilderState =
   SuggestionBuilder {runState = \state -> (Justt state, state)}
 
+getScope :: SuggestionBuilder Scope
+getScope =
+  getScopeFromState <$> getSuggestionBuilderState
+
+increaseScopeDepth :: SuggestionBuilder ()
+increaseScopeDepth = do
+  (Scope depth branch) <- getScope
+  setScope (Scope (depth + 1) branch)
+
+setScope :: Scope -> SuggestionBuilder ()
+setScope scope = do
+  state <- getSuggestionBuilderState
+  setSuggestionBuilderState state {getScopeFromState = scope}
+
 setSuggestionBuilderState :: SuggestionBuilderState -> SuggestionBuilder ()
 setSuggestionBuilderState state = SuggestionBuilder {runState = \_ -> (Justt (), state)}
 
-getTypeEnvironment :: SuggestionBuilder TypeEnvironment
+getTypeEnvironment :: SuggestionBuilder SuggestionBuilderTypeEnvironment
 getTypeEnvironment = getEnvironmentFromState <$> getSuggestionBuilderState
 
-setTypeEnvironment :: TypeEnvironment -> SuggestionBuilder ()
+setTypeEnvironment :: SuggestionBuilderTypeEnvironment -> SuggestionBuilder ()
 setTypeEnvironment env = do
   state <- getSuggestionBuilderState
   setSuggestionBuilderState state {getEnvironmentFromState = env}
@@ -282,24 +329,19 @@ getFreshVars num = do
   rest <- getFreshVars (num - 1)
   return $ res : rest
 
-{- getBranchCounter :: SuggestionBuilder Int
-getBranchCounter = getBranchCounterFromState <$> getSuggestionBuilderState
+applySubstitutionToTypePromise :: Substitution -> TypePromise -> TypePromise
+applySubstitutionToTypePromise sub (Const typ) = Const $ applySubstitution sub typ
+applySubstitutionToTypePromise sub fun@(Function {}) = fun -- TODO: properly implement this
+applySubstitutionToTypePromise sub (Result typ x1 x2 x3 x4) = Result (applySubstitution sub typ) x1 x2 x3 x4 -- TODO: properly implement this
 
-setBranchCounter :: Int -> SuggestionBuilder ()
-setBranchCounter branchCounter = do
-  state <- getSuggestionBuilderState
-  setSuggestionBuilderState state {getBranchCounterFromState = branchCounter}
-
-countBranch :: SuggestionBuilder ()
-countBranch = do
-  count <- getBranchCounter
-  setBranchCounter (count + 1) -}
+applySubstitutionToSuggestionBuilderTypeEnvironment :: Substitution -> SuggestionBuilderTypeEnvironment -> SuggestionBuilderTypeEnvironment
+applySubstitutionToSuggestionBuilderTypeEnvironment substitution typeEnv = Map.map (Map.map (applySubstitutionToTypePromise substitution)) typeEnv
 
 applySubstitutionToSuggestionBuilder :: Substitution -> SuggestionBuilder ()
 applySubstitutionToSuggestionBuilder sub =
   do
     currentEnv <- getTypeEnvironment
-    let newEnv = Map.insert ("added " ++ show sub) (TypeCon TypeBool) $ applySubstitutionToTypeEnvironment sub currentEnv
+    let newEnv = applySubstitutionToSuggestionBuilderTypeEnvironment sub currentEnv
     setTypeEnvironment newEnv
 
 getTokens :: SuggestionBuilder [TokenInfo]
@@ -408,7 +450,96 @@ findFirstMatch goal ((canExpr, canTyp, canState) : list) = case mostGeneralUnifi
   Nothing -> findFirstMatch goal list
   Just substitution -> Just (canExpr, applySubstitution substitution canTyp, canState)
 
-dropTypeArguments2 :: [LabelIdentifier] -> Type -> SuggestionBuilder (Type, TypeEnvironment)
+getTypesFromState :: String -> SuggestionBuilder (Map.Map Scope TypePromise)
+getTypesFromState key = do
+  env <- getTypeEnvironment
+  liftError $ Map.lookup key env
+
+safeFirst :: [a] -> Maybe a
+safeFirst [] = Nothing
+safeFirst (x : _) = Just x
+
+findType :: Scope -> Map.Map Scope TypePromise -> Maybe (Scope, TypePromise)
+findType scope map = safeFirst $ getTypesInScope scope map
+
+-- | gets all the types that are in scope (depth <= and on the same branch).
+--
+-- gives the largest depth first.
+getTypesInScope :: Scope -> Map.Map Scope TypePromise -> [(Scope, TypePromise)]
+getTypesInScope (Scope depthTarget currentBranch) map = filter (\(Scope depth branch, _) -> depth <= depthTarget && branch == currentBranch) $ Map.toDescList map
+
+getTypeFromState :: String -> SuggestionBuilder (Type, Maybe TypePromise)
+getTypeFromState identifier = do
+  current <- getTypesFromState identifier
+  scope <- getScope
+  (foundScope, promise) <- trace ("getting " ++ show identifier ++" at scope: " ++ show scope )$ liftError (findType scope current)
+  case promise of
+    Const typ -> return (typ, Nothing)
+    Function depth func _ -> do
+      tokensToRevertTo <- getTokens
+      trace ("branching at:" ++ show depth) $ branchAt depth
+      (remainingTokens, (name, label, expr, typ)) <- func
+      let newPromise = Result typ name label expr remainingTokens
+      typeEnv <- getTypeEnvironment
+      setTypeEnvironment $ Map.update (Just . Map.map (\x -> if x == promise then newPromise else x)) identifier typeEnv
+      setTokens tokensToRevertTo -- make sure we do set the remaining tokens to be eaten back to where we were.
+      return (typ, Just newPromise)
+    Result typ _ _ _ _ -> return (typ, Just promise)
+
+branchAt :: Depth -> SuggestionBuilder ()
+branchAt depth = do
+  (Scope _ branch) <- getScope
+  startingEnv <- getTypeEnvironment
+  let newBranch = branch + 1
+  let lookupScope = Scope depth branch
+
+  let newEnv :: SuggestionBuilderTypeEnvironment
+      newEnv =
+        Map.map
+          ( \item -> case getTypesInScope lookupScope item of
+              [] -> item -- if not in scope don't add it
+              list ->
+                foldr
+                  ( \(Scope depth _, typePromise) currentMap ->
+                      Map.insert (Scope depth newBranch) typePromise currentMap
+                  )
+                  item
+                  list -- add every in scope item to the new typeEnv with the new Branch
+          )
+          startingEnv
+
+  setTypeEnvironment newEnv
+  setScope $ Scope depth newBranch
+
+-- | backtrack the latest branch
+unBranch :: SuggestionBuilder ()
+unBranch = do
+  (Scope depth currentBranch) <- getScope
+  startingEnv <- getTypeEnvironment
+  let newEnv :: SuggestionBuilderTypeEnvironment
+      newEnv =
+        Map.mapMaybe
+          ( \item ->
+              let newItem =
+                    Map.mapMaybeWithKey
+                      (\(Scope _ branch) i -> if branch == currentBranch then Nothing else Just i) -- remove all entries at the current branch
+                      item
+               in if Map.null newItem -- if the new Scope TypePromise map is empty also remove it from the big String-map
+                    then Nothing
+                    else Just newItem
+          )
+          startingEnv
+  setTypeEnvironment newEnv
+  setScope $ Scope depth (currentBranch - 1)
+
+-- will insert a value into the type env at the current scope, if the current scope already exists it will replace the value
+insertIntoTypeEnvironment :: String -> Type -> SuggestionBuilder ()
+insertIntoTypeEnvironment identifier typ = trace "doing insertIntoTypeEnvironment" $ do
+  env <- trace "scope" getTypeEnvironment
+  scope <- trace "scope" getScope
+  setTypeEnvironment $ Map.insertWith Map.union identifier (Map.singleton scope (Const typ)) env
+
+dropTypeArguments2 :: [LabelIdentifier] -> Type -> SuggestionBuilder (Type, SuggestionBuilderTypeEnvironment)
 dropTypeArguments2 arguments typ = do
   typeEnv <- getTypeEnvironment
   case (arguments, typ) of
@@ -422,17 +553,18 @@ dropTypeArguments2 arguments typ = do
         applySubstitutionToSuggestionBuilder sub
         dropTypeArguments2 arguments newtyp
     (identifier : xs, TypeArrow a b) -> do
-      setTypeEnvironment (Map.insert identifier a typeEnv)
+      insertIntoTypeEnvironment identifier a
       dropTypeArguments2 xs b
     (identifier : xs, _) -> fail $ "Cannot take an argument from the type " ++ show typ ++ " to assign to " ++ show identifier ++ "!"
 
 generateFunctionSuggestion :: Type -> SuggestionBuilder (Pattern, [LabelIdentifier], WithSimplePos Expr, Type)
 generateFunctionSuggestion goal =
   let getNextName = do
+        tokens <- getTokens
         tok <- getToken (fail $ "Not Enough tokens to satisfy goal:\n" ++ show goal ++ "\n!")
         case tok of
           (TokenInfo (Name name) _ start end) -> return name
-          _ -> fail $ "name is not next, found: " ++ show tok ++ " instead"
+          _ -> fail $ "name is not next, found: " ++ show tok ++ " instead \n\tfor: " ++ show tokens
 
       many :: SuggestionBuilder a -> SuggestionBuilder [a]
       many x =
@@ -446,27 +578,26 @@ generateFunctionSuggestion goal =
 
       buildReturnType :: [LabelIdentifier] -> Type -> SuggestionBuilder Type
       buildReturnType args exprTyp =
-        let go typeEnv argsIn = case argsIn of
+        let go argsIn = case argsIn of
               [] -> return exprTyp
               identifier : xs ->
                 do
-                  argType <- liftError $ Map.lookup identifier typeEnv
-                  resultType <- go typeEnv xs
+                  (argType, _) <- getTypeFromState identifier
+                  resultType <- go xs
                   return $ TypeArrow argType resultType
          in do
-              typeEnv <- getTypeEnvironment
-              go typeEnv args
+              go args
    in do
         functionName <- getNextName
         arguments <- many getNextName
-        trace ("function name in let:" ++ functionName) $ consumeWhitespace
+        trace ("function name in let:" ++ functionName) consumeWhitespace
         consumeTokenIfExists EqualsSign
 
         freshVars <- getFreshVars (length arguments)
         let pairs = zip arguments freshVars
-        startingTypeEnv <- trace ("fresh vars:" ++ show freshVars) $ getTypeEnvironment
-        let typeEnvWithFreshVars = foldl (\typeEnv (argumentName, argumentType) -> Map.insert argumentName argumentType (Map.delete argumentName typeEnv)) startingTypeEnv pairs
-        setTypeEnvironment typeEnvWithFreshVars
+        startingTypeEnv <- trace ("fresh vars:" ++ show freshVars) getTypeEnvironment
+
+        foldM_ (\acc (argumentName, argumentType) -> insertIntoTypeEnvironment argumentName argumentType) () pairs
 
         (expressionGoal, updatedTypeEnv) <- trace ("goal:" ++ show goal) $ dropTypeArguments2 arguments goal
         trace ("expressionGoal:" ++ show expressionGoal) $ setTypeEnvironment updatedTypeEnv
@@ -486,26 +617,27 @@ generateFunctionSuggestion goal =
 -- findBestCandidate :: Type -> [Candidate] -> SuggestionBuilder Candidate
 findBestCandidate :: Type -> [Candidate] -> (Type -> SuggestionBuilder Type) -> (WithSimplePos Expr -> Type -> Substitution -> SuggestionBuilder b) -> SuggestionBuilder b
 findBestCandidate goal candidates typeTransform suggestionBuilderToTry =
-  let plugInArgument list =
-        case list of
-          (expr, nextArgType, state) : xs -> do
-            setSuggestionBuilderState state
-            currentTypeEnv <- getTypeEnvironment
-            typeToCompare <- typeTransform nextArgType
-            case mostGeneralUnifier typeToCompare goal of
-              Nothing ->
-                -- if the greedy version doesn't fit try the slightly less greedy result.
-                plugInArgument xs
-              Just sub ->
-                try
-                  (suggestionBuilderToTry expr typeToCompare sub)
-                  ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
-                    plugInArgument xs
-                  )
-          _ ->
-            -- no arguments fit
-            fail "no arguments fit"
-   in plugInArgument candidates
+  trace ("finding best candidates for " ++ show candidates) $
+    let plugInArgument list =
+          case list of
+            (expr, nextArgType, state) : xs -> do
+              setSuggestionBuilderState state
+              currentTypeEnv <- getTypeEnvironment
+              typeToCompare <- typeTransform nextArgType
+              case mostGeneralUnifier typeToCompare goal of
+                Nothing ->
+                  -- if the greedy version doesn't fit try the slightly less greedy result.
+                  plugInArgument xs
+                Just sub ->
+                  try
+                    (suggestionBuilderToTry expr typeToCompare sub)
+                    ( -- if the generateExpressionSuggestion above fails still see if the less greedy version works
+                      plugInArgument xs
+                    )
+            _ ->
+              -- no arguments fit
+              fail "no arguments fit 345346"
+     in plugInArgument candidates
 
 safeLast :: [a] -> Maybe a
 safeLast [] = Nothing
@@ -522,7 +654,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
             (TokenInfo (Name name) _ start end) ->
               do
                 typeEnv <- getTypeEnvironment
-                typ <- liftError (Map.lookup name typeEnv) <?> "could not find " ++ name ++ " in type environment"
+                (typ, _) <- getTypeFromState name <?> "could not find " ++ name ++ " in type environment"
                 currentState <- getSuggestionBuilderState
                 return (WithSimplePos start end (Label name), typ, currentState)
             (TokenInfo (Number num) _ start end) ->
@@ -563,36 +695,36 @@ generateExpressionSuggestion goal currentProcessType accumulator =
             -- in case the goal's return type is some constant we know how many arguments at maximum it will take
             getArgumentsFromTokens (length goalArguments)
         consumeTokenIfExists RArrow -- only consume the -> if it exists this helps in cases where the wrong symbol is used or the arrow is forgotten (and we know by the goal how many arguments we need)
+        originalScope <- getScope
+        increaseScopeDepth
         unconsumedArguments <- addArgumentsToTypeEnvironment goalArguments arguments
-        let expressionGoal = buildTypeFromArguments unconsumedArguments goalReturnType
-        candidates <- generateExpressionSuggestion expressionGoal Nothing []
+
+        let expressionGoal = buildTypeFromArguments (trace "unconsumedArguments#############" unconsumedArguments) (trace "goalReturnType######################" goalReturnType)
+        candidates <- generateExpressionSuggestion (trace "expressionGoal" expressionGoal) Nothing []
         let go candidateList = case candidateList of
               [] -> fail $ "could not generate an expression for this lambda stating at " ++ show start
               (expr, typ, env) : otherCandidates -> do
                 setSuggestionBuilderState env -- if we partially apply we need to revert the state.
                 newTypeEnv <- getTypeEnvironment
-                let typeArguments = mapMaybe (\(TokenInfo (Name name) _ _ _) -> Map.lookup name newTypeEnv) arguments
+
+                argumentScope <- getScope
+                
+                typeArguments <- trace ("Scope: " ++ show argumentScope) $ mapM (\(TokenInfo (Name name) _ _ _) -> fst <$> getTypeFromState name) arguments
                 let finalType = buildTypeFromArguments typeArguments typ
                 case mostGeneralUnifier finalType goal of
                   Nothing -> go otherCandidates -- if lambda type does not match goal try partially applied version
                   Just sub -> do
                     finalExpr <- buildLambdaExpression start (map liftTokenInfoToSimplePos arguments) expr
-                    revertTypeEnvironment arguments currentTypeEnv -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                    foldM_ (\_ (TokenInfo (Name name) _ _ _) -> removeTypeFromEnvironment argumentScope name) () arguments -- we revert the type environment to before we added the arguments of the lambda to the typeEnv.
+                    setScope originalScope -- we are done with the lambda so revert to the original scope
                     currentState <- getSuggestionBuilderState
                     return (finalExpr, finalType, currentState)
-        go candidates
+        go (trace "candidates" candidates)
 
       processLet :: (Int, Int) -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
       processLet start =
-        let {- processLocalDefinitions :: [[TokenInfo]] -> SuggestionBuilder [(Pattern, [LabelIdentifier], WithSimplePos Expr, Type)]
-            processLocalDefinitions list = mapM renameMe list
-
-            renameMe :: [TokenInfo] -> SuggestionBuilder (Pattern, [LabelIdentifier], WithSimplePos Expr, Type)
-            renameMe tok = do
-              setTokens tok
-              freshVar <- getFreshVar
-              generateFunctionSuggestion freshVar -}
-
+        let
+            -- | takes a configuration and uses it to build a suggestion
             generateLetSuggestion :: [([TokenInfo], Maybe [([TokenInfo], Bool)])] -> SuggestionBuilder (WithSimplePos Expr, Type, SuggestionBuilderState)
             generateLetSuggestion localDefConfigs =
               let appendIfJust :: [TokenInfo] -> Maybe [([TokenInfo], Bool)] -> [TokenInfo]
@@ -601,80 +733,79 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                       Just extras -> concatMap fst extras
                       Nothing -> []
                in do
-                    -- TODO: make sure that input variables of a local def are overwritten in the type environment and removed for subsequent local defs but restrictions on the rest should remain
                     oldTypeEnv <- getTypeEnvironment
-
+                    originalScope@(Scope depth branch) <- getScope
+                    let newDepth = depth + 1
+                    let newScope = Scope newDepth branch
+                    setScope newScope
                     let firstName :: [TokenInfo] -> String
                         firstName [] = "ERROR no name found!"
                         firstName (TokenInfo (Name s) _ _ _ : xs) = s
                         firstName (_ : xs) = firstName xs
 
-                        calculateNewTypeEnv :: SuggestionBuilder ([(LabelIdentifier, (Pattern, [LabelIdentifier], WithSimplePos Expr))], [TokenInfo], TypeEnvironment)
-                        calculateNewTypeEnv =
-                          SuggestionBuilder
-                            { runState =
-                                \env ->
-                                  let currentTypeEnv = getEnvironmentFromState env
-                                      newEnv = env {getFreshVarCounterFromState = getFreshVarCounterFromState env + 1}
+                    uuids <- getFreshVars (length localDefConfigs)
 
-                                      allEnvs = map (\(tokens, maybeContinuationTokens) -> env {getTokensFromState = removeWhitespace $ appendIfJust tokens maybeContinuationTokens, getEnvironmentFromState = finalEnv}) localDefConfigs
-                                      allNames = map (\(tokens, _) -> firstName tokens) localDefConfigs
-                                      freshVar = FreshVar $ getFreshVarCounterFromState env
-                                      generateFun = runState (generateFunctionSuggestion freshVar)
-                                      results = zip allNames $ map (fst . generateFun) allEnvs
-                                      states = map (snd . generateFun) allEnvs
-                                      (list, finalEnv) =
-                                        foldr
-                                          ( \(name, maybe) (expressions, env) ->
-                                              ( case maybe of
-                                                  Justt (a, b, c, typ) -> (name, (a, b, c)) : expressions
-                                                  _ -> expressions,
-                                                Map.insert
-                                                  name
-                                                  ( case maybe of
-                                                      Justt (_, _, _, typ) -> trace ("#-#-#-#-#-#-#-#-#-" ++ show name ++ show typ) typ
-                                                      Error str -> trace str (TypeError str)
-                                                  )
-                                                  env
-                                              )
-                                          )
-                                          ([], currentTypeEnv)
-                                          results
-                                   in ( Justt
-                                          ( list,
-                                            case safeLast states of
-                                              Just stat -> getTokensFromState stat
-                                              Nothing -> [],
-                                            finalEnv
-                                          ),
-                                        env
-                                      )
-                            }
-                
-                    
+                    let typePromiseEntries :: [(String, TypePromise)]
+                        typePromiseEntries =
+                          zipWith (curry ( \((tokens, cont),uuid) ->
+                                ( firstName tokens,
+                                  Function
+                                    newDepth
+                                    ( do
+                                        setTokens $ appendIfJust tokens cont
+                                        freshVar <- getFreshVar
+                                        consumeWhitespace
+                                        res <- generateFunctionSuggestion freshVar
+                                        leftOverTokes <- getTokens
+                                        return (leftOverTokes, res)
+                                    )
+                                    uuid
+                                )
+                            )) localDefConfigs uuids
 
-                    (expressions,remainingTokens , newTypeEnv) <- trace ("group" ++ show (localDefConfigs)) $ calculateNewTypeEnv
-                    let localDefs = map snd expressions
-                    
-                    setTypeEnvironment newTypeEnv
-                    --(_, remainingTokensOld) <- localDefsAndRemainingTokens
-                    trace ("\nremainingTokens: " ++ show remainingTokens) $ setTokens remainingTokens
+                    let newTypeEnvironment :: SuggestionBuilderTypeEnvironment
+                        newTypeEnvironment = foldr (\(name, promise) env -> Map.insertWith (\_newSingletonMap existingMap -> Map.insert newScope promise existingMap) name (Map.singleton newScope promise) env) oldTypeEnv typePromiseEntries
+
+                    trace ("typePromiseEntries:" ++ show typePromiseEntries) $ setTypeEnvironment newTypeEnvironment
+
+                    results <- map snd <$> mapM (\(name, _) -> trace ("getting: " ++ name ++ " from: "++ show newTypeEnvironment) $ getTypeFromState name) typePromiseEntries
+
+                    let extractResults :: [Maybe TypePromise] -> ([(Pattern, [LabelIdentifier], WithSimplePos Expr)], [TokenInfo])
+                        extractResults list =
+                          foldr
+                            ( \maybePromise acc@(localDef,remainingTokens)  -> case (maybePromise,remainingTokens) of
+                                (Just (Result _typ name labels expr restOfTokens),[]) -> ( (name,labels,expr): localDef,restOfTokens) -- if the remainingTokens is still empty we are in the first loop and can then use the first remainingTokens
+                                (Just (Result _typ name labels expr restOfTokens),_) -> ( (name,labels,expr): localDef,remainingTokens) -- otherwise we have already seen the remainingTokens so we don't need to consider the others
+                                _ -> trace ("error! one of the local defs wasn't a result instead we got: " ++ show maybePromise) acc
+                            )
+                            ([], [])
+                            list
+
+                    let (localDefinitions,remainingTokens) = extractResults results
+
+                    trace ("##########remainingTokens:" ++ show remainingTokens) $ setTokens remainingTokens
+
                     consumeWhitespace
+
                     consumeTokenIfExists In
-                    consumeWhitespace
 
                     candidates <- generateExpressionSuggestion goal Nothing []
+
                     findBestCandidate
-                      goal
-                      candidates
-                      pure
-                      ( \expr typ sub -> do
-                          applySubstitutionToSuggestionBuilder sub
-                          currentState <- getSuggestionBuilderState
-                          let (WithSimplePos _ end _) = expr
-                          return (WithSimplePos start end $ LetExpression localDefs expr, typ, currentState)
-                      )
-         in do
+                                goal
+                                candidates
+                                pure
+                                ( \expr typ sub -> do
+                                    applySubstitutionToSuggestionBuilder sub
+                                    currentState <- getSuggestionBuilderState
+                                    let (WithSimplePos _ end _) = expr
+                                    setScope originalScope -- revert the scope after the let
+                                    return (WithSimplePos start end $ LetExpression localDefinitions expr, typ, currentState)
+                                )
+
+
+         in
+            do
               consumeWhitespace
               tokens <- getTokens
               let localDefinitions = splitSections tokens
@@ -683,7 +814,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
 
               let configs = map generateLetSuggestion localDefConfigs
 
-              firstSuccessful "error! let contrains No definitions" configs
+              firstSuccessful "error! let contains No definitions" configs
 
       -- adds the candidate to the accumulator. (regardless of the goal) --TODO: performance: maybe only if the function could end up in the goal instead of always.
       -- if it matches the goal the substitution will also be applied to the candidates type and state.
@@ -802,30 +933,31 @@ consumeTokenIfExists target = do
 -- if there are types it a token will get it assigned otherwise it gets a free variable.
 -- will Return the types that were not assigned.
 addArgumentsToTypeEnvironment :: [Type] -> [TokenInfo] -> SuggestionBuilder [Type]
-addArgumentsToTypeEnvironment types [] = return types
+addArgumentsToTypeEnvironment types [] = trace "done with addArgumentsToTypeEnvironment" $ return types
 addArgumentsToTypeEnvironment (typ : restOfTypes) (x : xs) = do
   -- if there is a type given use it
   addLabelToTypeEnvironment typ x
   addArgumentsToTypeEnvironment restOfTypes xs
 addArgumentsToTypeEnvironment [] (x : xs) = do
   -- if there is no type given use a fresh variable
-  addLabelToTypeEnvironmentAsFreshVar x
+  trace "adding fresh var" addLabelToTypeEnvironmentAsFreshVar (trace ("x: " ++ show x) x)
   addArgumentsToTypeEnvironment [] xs
 
 addLabelToTypeEnvironment :: Type -> TokenInfo -> SuggestionBuilder ()
 addLabelToTypeEnvironment typ (TokenInfo (Name name) _ start end) = do
-  typeEnv <- getTypeEnvironment
-  setTypeEnvironment $ Map.insert name typ typeEnv
+  insertIntoTypeEnvironment name typ
 addLabelToTypeEnvironment _ _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
 
 addLabelToTypeEnvironmentAsFreshVar :: TokenInfo -> SuggestionBuilder ()
-addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = do
+addLabelToTypeEnvironmentAsFreshVar (TokenInfo (Name name) _ start end) = trace "addLabelToTypeEnvironmentAsFreshVar" $ do
   typeEnv <- getTypeEnvironment
-  freshVar <- getFreshVar
-  setTypeEnvironment $ Map.insert name freshVar typeEnv
+  freshVar <- trace "getFreshVar" getFreshVar
+  trace ("typeEnv: " ++ show typeEnv) $ insertIntoTypeEnvironment name freshVar
+  typeEnv2 <- getTypeEnvironment
+  return (trace ("typeEnv2: " ++ show typeEnv2) ())
 addLabelToTypeEnvironmentAsFreshVar _ = fail "internal ERROR addLabelToTypeEnvironmentAsFreshVar was not given a Name token!"
 
-revertTypeEnvironment :: [TokenInfo] -> TypeEnvironment -> SuggestionBuilder ()
+revertTypeEnvironment :: [TokenInfo] -> SuggestionBuilderTypeEnvironment -> SuggestionBuilder ()
 revertTypeEnvironment tokens oldTypeEnvironment = do
   newTypeEnvironment <- getTypeEnvironment
   let revert [] typeEnv = typeEnv
@@ -833,6 +965,21 @@ revertTypeEnvironment tokens oldTypeEnvironment = do
         Nothing -> revert restOfTokens $ Map.delete name typeEnv
         Just typ -> revert restOfTokens $ Map.insert name typ typeEnv
   setTypeEnvironment $ revert tokens newTypeEnvironment
+
+removeTypeFromEnvironment :: Scope -> String -> SuggestionBuilder ()
+removeTypeFromEnvironment scope identifier = do
+  env <- getTypeEnvironment
+  setTypeEnvironment $
+    Map.update
+      ( \map ->
+          let newMap = Map.delete scope map
+           in ( if null newMap
+                  then Nothing
+                  else Just newMap
+              )
+      )
+      identifier
+      env
 
 -- moves the first match with the first argument to the front, reordering the list. and giving the index to undo the swapping later
 firstMatchToFront :: Type -> [Type] -> Maybe (Int, [Type])
@@ -893,7 +1040,7 @@ splitSections input = map (Data.Bifunctor.first reverse) (splitSections2 [] Fals
     splitSections2 acc boolAcc (tok : tokens) = splitSections2 (tok : acc) boolAcc tokens
 
 -- takes a list of possible local definitions with bools indicating if they contain a let.
--- will return a list ofconfigurations where each configuration is a list of definitions (definition is [TokenInfo]) with a maybe continuation for nested lets
+-- will return a list of configurations where each configuration is a list of definitions (definition is [TokenInfo]) with a maybe continuation for nested lets
 getLocalDefConfigs :: [([TokenInfo], Bool)] -> [[([TokenInfo], Maybe [([TokenInfo], Bool)])]]
 getLocalDefConfigs localDefs@((firstLocalDef@(name : rst), containsLet) : rest) =
   let initialIndent = snd $ start_pos name

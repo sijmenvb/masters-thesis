@@ -31,6 +31,9 @@
       - [let parsing approach.](#let-parsing-approach)
         - [implementation details](#implementation-details)
         - [making the let selection](#making-the-let-selection)
+  - [processing order](#processing-order)
+  - [implementation](#implementation)
+    - [processing a function out of order](#processing-a-function-out-of-order)
 
 # Suggestions
 in short suggestions are generated as follows. 
@@ -497,3 +500,81 @@ because: we need to know if top levels are overwriten by a definition in a let.
 ##### making the let selection 
 for each let we encounter all the let ts with in minus the first n after each subsecton conaining a let where 
 1 <= n < length of let to the end of the list or next let. 
+
+## processing order
+the order in which we build suggestions is important. Each generated suggestion can add more restrictions on the types and the order in which we process will determine how we build the suggestions.
+
+for example take:
+```hs
+flipNum :: Bool -> Int -> Int
+
+myFun a b = 
+  let
+    x = flipNum a b
+    y = flipNum b a
+  in plus x y
+```
+here the types of `a` and `b` are being restricted by its uses in flipNum. however a mistake was made here since `a` (and `b`) are used both as a `Bool` and as an `Int`. one of these instances should have its arguments flipped. But which one??? 
+
+## implementation
+
+because we might need the type of an expression defined in tokens we have not seen yet we change our type environment from a `Map String Type` to a `Map String (Map Scope TypePromise)` where a 
+`TypePromise` is either a type or some function that takes the current state and (updates it and) returns a type. 
+`Scope` is a combination of a depth and a branch. the depth tells you which indent a type comes from. e.g. if you have a let where you define a `plus` that is also defined on a top level you will have two entries for `plus` in your type environment and you'd take the one with the highest depth. it is important to keep both so we can backtrack but still apply our substitutions globally.
+
+the branch is needed in case we need information that has not been computed yet. the branch allows us to jump to a parallel type environment while still being able to apply substitutions on all environments.
+
+as an example for why this is needed take:
+```hs
+plus :: Int -> Int -> Int
+
+myFun a = 
+  let
+    fun1 plus = plus fun2 a
+    fun2 = plus 4 a
+  in plus x y
+```
+lets assume we work from top to bottom (this might differ in practice). First we look at `fun1` which takes a variable `plus` as argument shadowing it's existing type. Then we encounter fun2 which we have not seen yet. so we need to pause here and first do fun2. the problem is that fun2 needs `plus` but we just shadowed it in figuring out fun1. so we somehow need to backtrack to when we knew what `plus` was we could have taken the environment at the time this fun2 was added to the type environment, however in `fun2` we learn that `a` needs to be an Int. and this information should be relayed back to fun1. (similar examples the other way around)  
+
+
+
+
+### processing a function out of order
+  when doing an out of order computation, for the type environment we do:
+  1. take the current type env
+  2. split it into values smaller than the current scope and bigger than the current scope
+  3. add the values smaller than the current scope to the environment under a new branch
+  4. set the new branch to be the current one
+  5. calculate the new suggestion
+  6. remove the new branch from the type environment
+  7. set back the current branch
+
+
+we need to do this branching because 
+e.g.
+```hs
+plus :: Int -> Int -> Int
+
+same :: a -> a -> a
+same x y = y
+
+ignoreFst :: a -> b -> b
+ignoreFst x y = y
+
+myFun a = 
+  let
+    fun1 plus = ignoreFst (same a plus) (fun2 plus) -- is the last plus restricted to be an Int here because it should have the same type as `a` but we only figured out what a is when computing fun2 
+    fun2 = plus 4 a
+  in plus x y
+
+``` 
+here the problem is that with the algorithm above the definition of plus is not around when the substitution for a is found while looking at fun2.
+
+the correct making of fresh variables assures we can keep applying substitutions globally over all branches.
+
+
+
+
+
+
+

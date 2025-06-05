@@ -27,7 +27,7 @@ standardTypeEnv = Map.empty
 main :: IO ()
 main = do
   putStrLn "\n\n\n\n"
-  let fileName = "./test programs/suggestions2.hs"
+  let fileName = "./test programs/suggestions4.hs"
   sourceString <- readFile fileName
   case runLexer sourceString of
     Left errorMsg -> putStrLn errorMsg

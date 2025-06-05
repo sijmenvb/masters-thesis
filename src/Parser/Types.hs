@@ -19,7 +19,7 @@ data Expr
   | Label LabelIdentifier
   | LambdaAbstraction LabelIdentifier (WithSimplePos Expr)
   | LetExpression [(Pattern, [LabelIdentifier], WithSimplePos Expr)] (WithSimplePos Expr)
-
+  deriving (Eq)
 -- used to construct a application while preserving position information
 buildApplication :: WithSimplePos Expr -> WithSimplePos Expr -> WithSimplePos Expr
 buildApplication expr1@(WithSimplePos start _ _) expr2@(WithSimplePos _ end _) = WithSimplePos start end $ Application expr1 expr2
