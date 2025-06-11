@@ -174,6 +174,7 @@ instance Eq TypePromise where
   (Result t1 p1 l1 e1 toks1) == (Result t2 p2 l2 e2 toks2) =
     t1 == t2 && p1 == p2 && l1 == l2 && e1 == e2 && toks1 == toks2
   _ == _ = False
+
 instance Show TypePromise where
   show (Const typ) = "Const: " ++ show typ
   show (Function depth _ _) = "<function at depth " ++ show depth ++ ">"
@@ -391,6 +392,24 @@ removeWhitespace ((TokenInfo NewlineAfterComment _ _ _) : xs) = removeWhitespace
 removeWhitespace ((TokenInfo (Comment _) _ _ _) : xs) = removeWhitespace xs
 removeWhitespace list = list
 
+-- | drops any tokens until it finds a name or number or anything in the targets list (1st argument) 
+--   should probably contain [TrueToken,FalseToken] in most cases
+removeAnyUntil :: [Lexer.Tokens.Token]-> [TokenInfo] -> [TokenInfo]
+removeAnyUntil targets [] = []
+removeAnyUntil targets input@(TokenInfo (Name _)_ _ _ : xs) = input --always stop on a name
+removeAnyUntil targets input@(TokenInfo (Number _)_ _ _ : xs) = input --always stop on a number
+removeAnyUntil targets input@(x: xs) = if token_type x `elem` targets then
+                      input --stop
+                    else
+                      removeAnyUntil targets xs
+
+-- | drops any tokens until it finds a name or number or anything in the targets list (1st argument) 
+--   should probably contain [TrueToken,FalseToken] in most cases
+consumeAnyUntil :: [Lexer.Tokens.Token]-> SuggestionBuilder ()
+consumeAnyUntil targets = do
+  tokens <- getTokens
+  setTokens $ removeAnyUntil targets tokens
+
 consumeWhitespace :: SuggestionBuilder ()
 consumeWhitespace = do
   tokens <- getTokens
@@ -477,18 +496,22 @@ getTypeFromState identifier = do
     Const typ -> return (typ, Nothing)
     Function depth func _ -> do
       tokensToRevertTo <- getTokens
-      trace ("branching at:" ++ show depth) $ branchAt depth
+      depthToRevertTo <- trace ("branching at:" ++ show depth) $ branchAt depth
+      -- TODO: remove the function here and replace with some error/(fresh var and unify with it later to check that we are stable???)
       (remainingTokens, (name, label, expr, typ)) <- func
+      typeEnvBefore <- getTypeEnvironment
+      trace ("-----------env before unbranching: " ++ show typeEnvBefore) $ unBranch depthToRevertTo
       let newPromise = Result typ name label expr remainingTokens
       typeEnv <- getTypeEnvironment
-      setTypeEnvironment $ Map.update (Just . Map.map (\x -> if x == promise then newPromise else x)) identifier typeEnv
+      trace ("-----------env after unbranching: " ++ show typeEnv) $ setTypeEnvironment $ Map.update (Just . Map.map (\x -> if x == promise then newPromise else x)) identifier typeEnv
       setTokens tokensToRevertTo -- make sure we do set the remaining tokens to be eaten back to where we were.
+      --TODO: unbranch at some point????
       return (typ, Just newPromise)
     Result typ _ _ _ _ -> return (typ, Just promise)
 
-branchAt :: Depth -> SuggestionBuilder ()
+branchAt :: Depth -> SuggestionBuilder Depth
 branchAt depth = do
-  (Scope _ branch) <- getScope
+  (Scope oldDepth branch) <- getScope
   startingEnv <- getTypeEnvironment
   let newBranch = branch + 1
   let lookupScope = Scope depth branch
@@ -510,11 +533,12 @@ branchAt depth = do
 
   setTypeEnvironment newEnv
   setScope $ Scope depth newBranch
+  return oldDepth
 
 -- | backtrack the latest branch
-unBranch :: SuggestionBuilder ()
-unBranch = do
-  (Scope depth currentBranch) <- getScope
+unBranch :: Depth ->  SuggestionBuilder ()
+unBranch depthToRevertTo = do
+  (Scope _ currentBranch) <- getScope
   startingEnv <- getTypeEnvironment
   let newEnv :: SuggestionBuilderTypeEnvironment
       newEnv =
@@ -530,7 +554,7 @@ unBranch = do
           )
           startingEnv
   setTypeEnvironment newEnv
-  setScope $ Scope depth (currentBranch - 1)
+  setScope $ Scope depthToRevertTo (currentBranch - 1)
 
 -- will insert a value into the type env at the current scope, if the current scope already exists it will replace the value
 insertIntoTypeEnvironment :: String -> Type -> SuggestionBuilder ()
@@ -708,7 +732,7 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                 newTypeEnv <- getTypeEnvironment
 
                 argumentScope <- getScope
-                
+
                 typeArguments <- trace ("Scope: " ++ show argumentScope) $ mapM (\(TokenInfo (Name name) _ _ _) -> fst <$> getTypeFromState name) arguments
                 let finalType = buildTypeFromArguments typeArguments typ
                 case mostGeneralUnifier finalType goal of
@@ -732,16 +756,17 @@ generateExpressionSuggestion goal currentProcessType accumulator =
                     base ++ case maybeExtra of
                       Just extras -> concatMap fst extras
                       Nothing -> []
+
+                  firstName :: [TokenInfo] -> String
+                  firstName [] = "ERROR no name found!"
+                  firstName (TokenInfo (Name s) _ _ _ : xs) = s
+                  firstName (_ : xs) = firstName xs
                in do
                     oldTypeEnv <- getTypeEnvironment
                     originalScope@(Scope depth branch) <- getScope
                     let newDepth = depth + 1
                     let newScope = Scope newDepth branch
                     setScope newScope
-                    let firstName :: [TokenInfo] -> String
-                        firstName [] = "ERROR no name found!"
-                        firstName (TokenInfo (Name s) _ _ _ : xs) = s
-                        firstName (_ : xs) = firstName xs
 
                     uuids <- getFreshVars (length localDefConfigs)
 
@@ -785,7 +810,8 @@ generateExpressionSuggestion goal currentProcessType accumulator =
 
                     trace ("##########remainingTokens:" ++ show remainingTokens) $ setTokens remainingTokens
 
-                    consumeWhitespace
+
+                    consumeAnyUntil [TrueToken,FalseToken,In] 
 
                     consumeTokenIfExists In
 

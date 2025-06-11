@@ -208,8 +208,30 @@ fun x y =
         vare = 5
     in
         5)
-|] `shouldBe` "fun x y = \n1    let \n2        fun a b = plus a b \n2        var = \n3            let \n4                plus x y = x \n3            in x \n2        vare = 5 \n1    in \n2        5 , (v10 -> (v12 -> Int))"
+|] `shouldBe` "fun x y = \n1    let \n2        fun a b = plus a b \n2        var = \n3            let \n4                plus x y = x \n3            in x \n2        vare = 5 \n1    in \n2        5 , (v24 -> (v12 -> Int))"
 
+  it "weird trailing symbols" $ do -- note that there might be correct parenthesis that remain unconsumed 
+    runSuggestion [r|
+fun x y =
+    let
+        var3 = plus 5 (plus 5 5) -> (
+    in 
+        var3
+|] `shouldBe` "fun x y = \n1    let \n2        var3 = plus 5 (plus 5 5) \n1    in \n2        var3 , (v10 -> (v12 -> Int))"
+
+  it "branching and un-branching" $ do -- this refers to not loosing fun3 once we "jump"(/branch) to do fun4
+    runSuggestion [r|
+fun x y =
+    let
+        var3 = 
+            let
+                fun3 = plus
+            in
+                fun4 5 (fun3 5 5)
+        fun4 a b = plus a b 
+    in 
+        var3)
+|] `shouldBe` "fun x y = \n1    let \n2        var3 = \n3            let \n4                fun3 = plus \n3            in \n4                fun4 5 (fun3 5 5) \n2        fun4 a b = plus a b \n1    in \n2        var3 , (v10 -> (v12 -> Int))"
 
 
 

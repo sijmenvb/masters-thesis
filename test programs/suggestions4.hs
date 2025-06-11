@@ -17,9 +17,11 @@ plus :: Int -> Int -> Int
 
 fun x y =
     let
-        fun a b = plus a b
-            var = let
-                plus x y = x in x
-        vare = 5
-    in
-        5)
+        var3 = 
+            let
+                fun3 = plus
+            in
+                fun4 5 (fun3 5 5)
+        fun4 a b = plus a b 
+    in 
+        var3)
