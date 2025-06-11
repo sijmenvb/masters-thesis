@@ -13,6 +13,7 @@ import Lexer.Tokens
 import Parser.ParserBase (WithSimplePos (WithSimplePos))
 import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
+import qualified Data.Bifunctor as Bifunctor
 
 data Action a
   = Keep a
@@ -35,12 +36,12 @@ recreateOriginalWithDifferencesShow tokensIn =
   let recreateOriginalShow2 :: Int -> Int -> [(Token, String, Action Token)] -> String
       recreateOriginalShow2 indentLevel originalIndentLevel tokens = case tokens of
         t1@(Newline, _, _) : (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel (t1 : tokensRest)
-        t1@(Newline, _, _) : (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel  (originalIndentLevel- 1) (t1 : tokensRest)
+        t1@(Newline, _, _) : (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel - 1) (t1 : tokensRest)
         t1@(Newline, _, _) : (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) (t1 : tokensRest)
         [] -> ""
         [(Newline, color, _)] -> ""
         (Newline, color, action) : tokensRest ->
-          let indentDifference =  indentLevel - originalIndentLevel
+          let indentDifference = indentLevel - originalIndentLevel
            in ( case action of
                   Keep _ -> "\n"
                   _ ->
@@ -57,10 +58,10 @@ recreateOriginalWithDifferencesShow tokensIn =
                 ++ resetColor
                 ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (Indent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) originalIndentLevel tokensRest
-        (Indent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel+ 1)  tokensRest
+        (Indent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel + 1) tokensRest
         (Indent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) (originalIndentLevel + 1) tokensRest
         (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel tokensRest
-        (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel  (originalIndentLevel- 1) tokensRest
+        (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel - 1) tokensRest
         (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) tokensRest
         (tok, color, _) : rpar@(Rpar, _, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel (rpar : tokensRest)
         (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
@@ -166,13 +167,20 @@ createTargetTokensFromExpr expr =
 
           return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar]
         (WithSimplePos _ _ (LetExpression definitions inExpressions)) ->
-          let defitionToTokens functionName identifiers expr = do
+          let definitionToTokens functionName identifiers expr = do
                 let nameToken = Require (Name functionName)
                 let argumentTokens = map (\name -> Require (Name name)) identifiers
-                exprTokens <- createTargetTokensFromExpr expr
-                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline, Optional Newline Nothing]
+                exprTokensOut <- createTargetTokensFromExpr expr
+                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut
+                      where
+                        go (tok@(Require Dedent): xs) = Bifunctor.second (tok:) (go xs)
+                        go (tok@(Optional Dedent _): xs) = Bifunctor.second (tok:) (go xs)
+                        go xs = (reverse xs,[])
+                        
+
+                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline] ++ trailingDedents ++[Optional Newline Nothing]
            in do
-                definitionTokens <- mapM (\(x, y, z) -> defitionToTokens x y z) definitions
+                definitionTokens <- mapM (\(x, y, z) -> definitionToTokens x y z) definitions
                 inExpressionTokens <- createTargetTokensFromExpr inExpressions
                 firstIndentId <- getId
                 return $
