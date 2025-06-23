@@ -36,7 +36,7 @@ import Parser.ParserBase
   )
 import qualified Parser.ParserBase as Lexer.Tokens.TokenInfo
 import Parser.Types
-import Suggestions.TokenDifference (Action (..), ExtendedTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
+import Suggestions.TokenDifference (Action (..), TargetTokens, generateActions, recreateOriginalWithDifferencesShow, sectionToSuggestion)
 import qualified System.IO.Error as Map
 import Text.Megaparsec (MonadParsec (token), ParseErrorBundle, Stream (Token), between, errorBundlePretty)
 import TypeInference.TypeInference
@@ -95,7 +95,7 @@ dropTypeArguments arguments typeEnv typ =
 type FreshVariableCounter = Int
 
 -- See Note [Suggestions/Suggestions/generateSuggestion]
-generateSuggestion :: FreshVariableCounter -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)
+generateSuggestion :: FreshVariableCounter -> Map.Map String Type -> [TokenInfo] -> MaybeError ([TargetTokens], String, String, Type, Int)
 generateSuggestion state typeEnv tokens =
   let functionName = getSectionName tokens
       getArguments :: [TokenInfo] -> [WithSimplePos LabelIdentifier]

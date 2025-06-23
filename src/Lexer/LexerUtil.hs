@@ -332,7 +332,7 @@ startWhite inp inp_len = do
                     --TODO: this should fail. but now we just don't this usually helps with wrong indentation, as the suggestion builder does not care but the diff is wrong
                     alexSetUserState $ userState {
                           userStateIndentStack = post,
-                          userStatePendingTokens= nl_tokens ++ map (const (internalAddIndentToPreviousTokenInfo (line, pos-1))) pre ++ map (const (dedentTokenInfo (line, pos-1))) pre++ map (const (dedentTokenInfo (line, pos-1))) pre}
+                          userStatePendingTokens= nl_tokens ++ map (const (internalAddIndentToPreviousTokenInfo (line, pos-1))) pre ++ map (const (dedentTokenInfo (line, pos-1))) pre}
               
                     --error $ "Invalid indents : " ++ "pos = " ++ show pos ++ " top= " ++ show top ++ "userState = " ++ show userState ++ "pre = " ++ show pre ++ "post = " ++ show post
           when (pos == cur) $

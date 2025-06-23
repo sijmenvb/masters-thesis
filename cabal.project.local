@@ -1,2 +1,6 @@
 ignore-project: False
 tests: True
+
+package *
+  profiling: True
+  ghc-options: -fprof-auto

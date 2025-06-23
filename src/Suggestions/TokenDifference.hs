@@ -14,6 +14,7 @@ import Parser.ParserBase (WithSimplePos (WithSimplePos))
 import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
 import qualified Data.Bifunctor as Bifunctor
+import Control.Applicative (optional)
 
 data Action a
   = Keep a
@@ -74,7 +75,7 @@ instance Show a => Show (Action a) where
   show (Add a) = greenColor ++ show a ++ resetColor
   show (Remove a) = redColor ++ show a ++ resetColor
 
-data ExtendedTokens
+data TargetTokens
   = Require Token
   | Optional Token (Maybe Int)
   deriving (Ord, Eq)
@@ -96,16 +97,16 @@ greenColor = setSGRCode [SetColor Foreground Vivid Green]
 redColor :: String
 redColor = setSGRCode [SetColor Foreground Vivid Red]
 
-instance Show ExtendedTokens where
+instance Show TargetTokens where
   show (Require token) =
     whiteColor ++ show token ++ resetColor
   show (Optional token num) =
     grayColor ++ show token ++ show num ++ resetColor
 
-sectionToSuggestion :: Section -> ([ExtendedTokens], Int)
+sectionToSuggestion :: Section -> ([TargetTokens], Int)
 sectionToSuggestion sect = runState (createTargetTokensFromSection sect) 0
 
-createTargetTokensFromSection :: Section -> State Int [ExtendedTokens]
+createTargetTokensFromSection :: Section -> State Int [TargetTokens]
 createTargetTokensFromSection section =
   case section of
     FunctionDefinition name vars expr ->
@@ -115,7 +116,7 @@ createTargetTokensFromSection section =
         return $ Require (Name name) : varTokens ++ (Require EqualsSign : exprTokens)
     FunctionType name typ -> return []
 
-createTargetTokensFromExpr :: WithSimplePos Expr -> State Int [ExtendedTokens]
+createTargetTokensFromExpr :: WithSimplePos Expr -> State Int [TargetTokens]
 createTargetTokensFromExpr expr =
   let getId :: State Int Int
       getId =
@@ -156,22 +157,24 @@ createTargetTokensFromExpr expr =
         (WithSimplePos _ _ (LambdaAbstraction _ _)) -> do
           let (arguments, exprInLambda) = getNestedLambdas expr
           exprTokens <- createTargetTokensFromExpr exprInLambda
+          newLineId <- getId
           let buildLambda args = case args of
-                [argumentName] -> return $ Require (Name argumentName) : Require RArrow : exprTokens
+                [argumentName] -> 
+                  return $ Require (Name argumentName)  : Require RArrow : Optional Indent (Just newLineId) : Optional Newline (Just newLineId) : exprTokens 
                 (argumentName : restOfArguments) -> do
                   lambdaID <- getId
                   innerTokens <- buildLambda restOfArguments
                   return $ Require (Name argumentName) : Optional RArrow (Just lambdaID) : Optional Lpar (Just lambdaID) : Optional Lambda (Just lambdaID) : innerTokens ++ [Optional Rpar (Just lambdaID)]
 
-          lambdaBody <- buildLambda arguments
+          lambdaBody <- buildLambda arguments 
 
-          return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar]
+          return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar, Optional Dedent (Just newLineId)] 
         (WithSimplePos _ _ (LetExpression definitions inExpressions)) ->
           let definitionToTokens functionName identifiers expr = do
                 let nameToken = Require (Name functionName)
                 let argumentTokens = map (\name -> Require (Name name)) identifiers
                 exprTokensOut <- createTargetTokensFromExpr expr
-                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut
+                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut --our nextLine token comes before the dedent, so we strip off the last dedents so we can add them separately after the nextLine.
                       where
                         go (tok@(Require Dedent): xs) = Bifunctor.second (tok:) (go xs)
                         go (tok@(Optional Dedent _): xs) = Bifunctor.second (tok:) (go xs)
@@ -182,6 +185,7 @@ createTargetTokensFromExpr expr =
            in do
                 definitionTokens <- mapM (\(x, y, z) -> definitionToTokens x y z) definitions
                 inExpressionTokens <- createTargetTokensFromExpr inExpressions
+                newLineBeforeLetId <- getId
                 firstIndentId <- getId
                 return $
                   [Require Indent, Require Newline, Require Let, Require Indent, Require Newline]
@@ -189,7 +193,7 @@ createTargetTokensFromExpr expr =
                     ++ [Require Dedent, Require In, Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId)]
                     ++ inExpressionTokens
                     ++ [Optional Dedent (Just firstIndentId), Require Dedent]
-        _ -> undefined
+        
 
 needsParentheses :: Expr -> Bool
 needsParentheses expr =
@@ -199,7 +203,7 @@ needsParentheses expr =
     LambdaAbstraction _ _ -> True
     _ -> False
 
-generateActions :: [ExtendedTokens] -> [Token] -> [Action Token]
+generateActions :: [TargetTokens] -> [Token] -> [Action Token]
 generateActions extTokensIn tokensIn =
   -- generateActions2 is heavily inspired by Levenshtein distance, probably not very efficient
   let standardWeight :: Int
@@ -217,7 +221,7 @@ generateActions extTokensIn tokensIn =
       append :: Int -> Action Token -> (Int, [Action Token]) -> (Int, [Action Token])
       append incrementAmmount actionToken (num, list) = (num + incrementAmmount, actionToken : list)
 
-      dynamicGenerateActions2 :: Map Int Bool -> [ExtendedTokens] -> [Token] -> State (Map (Map Int Bool, [ExtendedTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+      dynamicGenerateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
       dynamicGenerateActions2 foundTokens extTokens tokens = do
         answers <- get
         case Map.lookup (foundTokens, extTokens, tokens) answers of
@@ -228,7 +232,7 @@ generateActions extTokensIn tokensIn =
             put $ Map.insert (foundTokens, extTokens, tokens) x answers2
             return x
 
-      generateActions2 :: Map Int Bool -> [ExtendedTokens] -> [Token] -> State (Map (Map Int Bool, [ExtendedTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+      generateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
       generateActions2 foundTokens extTokens tokens =
         case (extTokens, tokens) of
           -- allow for comments

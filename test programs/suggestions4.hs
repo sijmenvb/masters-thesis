@@ -1,8 +1,3 @@
-
-
-
-
-
 trice f x = f (f (f x))
 
 invertNum :: Bool -> Int -> Int
@@ -15,7 +10,7 @@ invertNum :: Bool -> Int -> Int
 
 plus :: Int -> Int -> Int
 
-fun x y =
+fun2 x y =
     let
         var3 = 
             let
@@ -25,3 +20,7 @@ fun x y =
         fun4 a b = plus a b 
     in 
         var3)
+
+
+
+fun = plus plus 4 5 6
