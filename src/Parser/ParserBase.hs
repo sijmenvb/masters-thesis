@@ -9,6 +9,7 @@
 
 module Parser.ParserBase where
 
+import Control.Monad.State
 import qualified Data.List as DL
 import Data.List.NonEmpty (NonEmpty (..))
 import qualified Data.List.NonEmpty as NE
@@ -17,7 +18,7 @@ import qualified Data.Set as Set
 import Data.Text (length, unpack)
 import Data.Void
 import Lexer.Tokens as Tokens
-import Text.Megaparsec
+import Text.Megaparsec hiding (State)
 
 data WithPos a = WithPos
   { startPos :: SourcePos,
@@ -32,6 +33,7 @@ data WithSimplePos a = WithSimplePos
     end_pos :: (Int, Int),
     value :: a
   }
+  deriving (Eq)
 
 instance Show a => Show (WithSimplePos a) where
   show :: Show a => WithSimplePos a -> String
@@ -67,6 +69,10 @@ liftTokenInfo :: TokenInfo -> WithPos TokenInfo
 liftTokenInfo tok@TokenInfo {start_pos = (lineBegin, columnBegin), end_pos = (lineEnd, columnEnd), token_string = str} =
   let nonZero = max 1 -- megaparsec has 1 as the first position not 0, no idea why it works for all other values...
    in WithPos (SourcePos "" (mkPos $ nonZero lineBegin) (mkPos $ nonZero columnBegin)) (SourcePos "" (mkPos $ nonZero lineEnd) (mkPos $ nonZero columnEnd)) (Data.Text.length str) tok
+
+liftTokenInfoToSimplePos :: TokenInfo -> WithSimplePos Tokens.Token
+liftTokenInfoToSimplePos TokenInfo {start_pos = start, end_pos = end, token_type = tok} =
+  WithSimplePos start end tok
 
 instance Stream MyStream where
   type Token MyStream = WithPos TokenInfo
@@ -146,7 +152,15 @@ pxy = Proxy
 showMyToken :: TokenInfo -> String
 showMyToken (TokenInfo _ str _ _) = unpack str
 
-type Parser = Parsec Void MyStream
+newtype ParserState = ParserState
+  { indentLevel :: Int
+  }
+  deriving (Show)
+
+getIndentLevel :: Parser Int
+getIndentLevel = indentLevel <$> lift get
+
+type Parser = ParsecT Void MyStream (State ParserState)
 
 liftMyToken :: TokenInfo -> WithPos TokenInfo
 liftMyToken myToken = WithPos pos pos 0 myToken
@@ -170,6 +184,18 @@ pToken input_token = do
             else Nothing
     nes x = x :| []
 
+pIndent :: Parser (WithSimplePos Tokens.Token)
+pIndent = do
+  tok <- pToken Indent
+  modify (\s -> s {indentLevel = indentLevel s + 1})
+  return tok
+
+pDedent :: Parser (WithSimplePos Tokens.Token)
+pDedent = do
+  tok <- pToken Dedent
+  modify (\s -> s {indentLevel = indentLevel s - 1})
+  return tok
+
 pString :: String -> Parser (WithSimplePos String)
 pString string = token test Set.empty <?> string
   where
@@ -178,10 +204,24 @@ pString string = token test Set.empty <?> string
         then Just $ WithSimplePos start_pos end_pos string
         else Nothing
 
+--TODO: deal with empty lines
+--TODO: also consume comments as whitespace.
+
 pWhiteSpace :: Parser ()
-pWhiteSpace = do
-  _ <- many $ pToken Newline <|> pToken Indent <|> pToken Dedent <|> pToken NewlineAfterComment
-  return ()
+pWhiteSpace =
+  let pIndentNextLine = do
+        pIndent
+        pNextLine
+
+    
+          
+   in do
+        _ <- many $ pIndentNextLine <|> pIndent <|> pDedent
+        return ()
+
+pNextLine :: Parser (WithSimplePos Tokens.Token)
+pNextLine = do
+  pToken Newline <|> pToken NewlineAfterComment
 
 pName :: Parser (WithSimplePos Tokens.Token)
 pName = pToken (Name "") <?> "some name"
@@ -195,25 +235,3 @@ pInt = token test Set.empty <?> "integer"
 
 liftToken :: Tokens.Token -> TokenInfo
 liftToken tok = TokenInfo tok "" (0, 0) (0, 0)
-
-pSum :: Parser (WithSimplePos (Int, Int))
-pSum = do
-  WithSimplePos start _ a <- pInt
-  _ <- pToken Plus
-  WithSimplePos _ end b <- pInt
-  return (WithSimplePos start end (a, b))
-
-exampleStream :: MyStream
-exampleStream =
-  MyStream
-    "5 + 6"
-    [ at 1 1 $ liftToken (Number 5),
-      at 1 3 $ liftToken Plus, -- (1)
-      at 1 5 $ liftToken (Number 6)
-    ]
-  where
-    at l c = WithPos (at' l c) (at' l (c + 1)) 2
-    at' l c = SourcePos "" (mkPos l) (mkPos c)
-
-myTest :: IO ()
-myTest = parseTest (pSum <* eof) exampleStream

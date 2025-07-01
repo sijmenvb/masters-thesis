@@ -82,6 +82,7 @@ If the file ends while indented **NO** `Dedent` tokens will be generated.
 Empty lines and lines with (only) comments are ignored for the 
 
 
+ <!-- TODO: explain the InternalAddIndentToPrevious --> 
 
 ## Running the lexer
 

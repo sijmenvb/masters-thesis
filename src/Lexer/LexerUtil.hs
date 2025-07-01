@@ -17,6 +17,7 @@ import qualified Data.Text as T
 import Lexer.Tokens
 import RIO
 import Prelude (read)
+import Debug.Trace 
 
 -- first step is to decide what our AlexInput type is going to be.
 -- Going with general practices(wrapper examples), we will have the following
@@ -264,6 +265,15 @@ dedentTokenInfo start_pos =
       end_pos = (fst start_pos + 1, snd start_pos)
     }
 
+internalAddIndentToPreviousTokenInfo :: (Int, Int) -> TokenInfo
+internalAddIndentToPreviousTokenInfo start_pos =
+  TokenInfo
+    { token_type = InternalAddIndentToPrevious,
+      token_string = "",
+      start_pos = (fst start_pos + 1, snd start_pos),
+      end_pos = (fst start_pos + 1, snd start_pos)
+    }
+
 startWhite:: AlexAction TokenInfo
 startWhite inp inp_len = do
      is <- userStateIndentStack <$> alexGetUserState
@@ -304,16 +314,27 @@ startWhite inp inp_len = do
             -- takes care of adding the preceding new lines as well
             userStatePendingTokens=nl_tokens ++ [constructToken Indent inp inp_len n_inp]}
           when (pos < cur) $ do
+                 let doubleIndent list = reverse (insertAfterFirst (reverse list))
+                                                where
+                                                  insertAfterFirst  [] = []
+                                                  insertAfterFirst  (y@(TokenInfo tok _ _ _):ys)
+                                                    | tok == Indent = y : y : ys
+                                                    | otherwise = y : insertAfterFirst ys 
                  let (pre, post) = span (> pos) is
                  let top = case post of
                        t:_ -> t
                        [] -> error $ unwords ["Invalid indent with cur= ", show cur]
-                 if pos == top then
+                 if pos == top then 
                     alexSetUserState $ userState {
                           userStateIndentStack = post,
                           userStatePendingTokens=nl_tokens ++ map (const (dedentTokenInfo (line, pos-1))) pre}
-                 else
-                   error $ "Invalid indents : " ++ "pos = " ++ show pos ++ " top= " ++ show top ++ "userState = " ++ show userState ++ "pre = " ++ show pre ++ "post = " ++ show post
+                 else 
+                    --TODO: this should fail. but now we just don't this usually helps with wrong indentation, as the suggestion builder does not care but the diff is wrong
+                    alexSetUserState $ userState {
+                          userStateIndentStack = post,
+                          userStatePendingTokens= nl_tokens ++ map (const (internalAddIndentToPreviousTokenInfo (line, pos-1))) pre ++ map (const (dedentTokenInfo (line, pos-1))) pre}
+              
+                    --error $ "Invalid indents : " ++ "pos = " ++ show pos ++ " top= " ++ show top ++ "userState = " ++ show userState ++ "pre = " ++ show pre ++ "post = " ++ show post
           when (pos == cur) $
                   alexSetUserState $ userState {
                   userStatePendingTokens=nl_tokens}

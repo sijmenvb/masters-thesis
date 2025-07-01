@@ -75,6 +75,7 @@ data Token
   | NewlineAfterComment
   | EOF
   | Indent
+  | InternalAddIndentToPrevious -- used when finding too many indents.
   | Dedent
   | Comment String
   | TrueToken
@@ -157,16 +158,19 @@ showExact token =
     Lambda -> "\\"
     Let -> "let"
     In -> "in"
+    _ -> show token
 
 recreateOriginalShow :: [Token] -> String
 recreateOriginalShow tokensIn =
   let recreateOriginalShow2 :: Int -> [Token] -> String
       recreateOriginalShow2 indentLevel tokens = case tokens of
+        Newline : Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (Newline:tokensRest)
         [] -> ""
         Newline : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
         Indent : tokensRest -> recreateOriginalShow2 (indentLevel + 1) tokensRest
         Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) tokensRest
         tok : Rpar : tokensRest -> showExact tok ++ recreateOriginalShow2 indentLevel (Rpar : tokensRest)
         Lpar : tokensRest -> showExact Lpar ++ recreateOriginalShow2 indentLevel tokensRest
+        Lambda : tokensRest -> showExact Lambda ++ recreateOriginalShow2 indentLevel tokensRest
         tok : tokensRest -> showExact tok ++ " " ++ recreateOriginalShow2 indentLevel tokensRest
    in recreateOriginalShow2 0 tokensIn

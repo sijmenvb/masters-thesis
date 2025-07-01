@@ -58,8 +58,9 @@ freeExpressionVariables (WithSimplePos _ _ (Bool _)) = Set.empty
 freeExpressionVariables (WithSimplePos _ _ (Label identifier)) = Set.singleton identifier
 freeExpressionVariables (WithSimplePos _ _ (Application expression1 expression2)) = Set.union (freeExpressionVariables expression1) (freeExpressionVariables expression2)
 freeExpressionVariables (WithSimplePos _ _ (LambdaAbstraction identifier lambdaExpr)) = Set.delete identifier (freeExpressionVariables lambdaExpr)
-freeExpressionVariables (WithSimplePos _ _ (LetExpression patttern expression1 expression2)) = Set.union (freeExpressionVariables expression1) (Set.delete patttern (freeExpressionVariables expression2))
+freeExpressionVariables (WithSimplePos _ _ (LetExpression bodies expression2)) = foldl (\inputSet (patttern, arguments, expression1) -> Set.union (foldl (flip Set.delete) (freeExpressionVariables expression1) arguments) (Set.delete patttern inputSet)) (freeExpressionVariables expression2) bodies
 
+-- patttern arguments expression1
 freeTypeVariables :: Type -> Set.Set Type
 freeTypeVariables typ@(TypeVar _) = Set.singleton typ
 freeTypeVariables typ@(FreshVar _) = Set.singleton typ
@@ -235,8 +236,26 @@ typeInference typeEnv (WithSimplePos _ _ (Application expression1@(WithSimplePos
     liftError (mostGeneralUnifier (applySubstitution substitution2 foundType1) (TypeArrow foundType2 fresh))
       <?> "Unification ERROR could not unify " ++ show foundType1 ++ " and  " ++ show (TypeArrow foundType2 fresh) ++ " at " ++ show start1 ++ ":" ++ show end1 ++ " and " ++ show start2 ++ ":" ++ show end2 ++ " respectively." -- TODO: proper error message that repeats offending code etc.
   return (composeSubstitution substitution3 (composeSubstitution substitution2 substitution1), applySubstitution substitution3 fresh)
-typeInference typeEnv (WithSimplePos _ _ (LetExpression patttern expression1 expression2)) = do
-  (substitution1, foundType1) <- typeInference typeEnv expression1
-  let sigma = generalise (applySubstitutionToTypeEnvironment substitution1 typeEnv) foundType1
-  (substitution2, foundType2) <- typeInference (Map.insert patttern sigma (Map.delete patttern (applySubstitutionToTypeEnvironment substitution1 typeEnv))) expression2
-  return (composeSubstitution substitution2 substitution1, foundType2)
+typeInference typeEnv (WithSimplePos _ _ (LetExpression bodies expression2)) =
+  let processBody (patttern, arguments, expression1) = do
+        freshVariables <- generateFreshVars (length arguments)
+        let typeEnvInsideLambda = foldl (\env (fresh, arg) -> Map.insert arg fresh (Map.delete arg env)) typeEnv (zip freshVariables arguments)
+        (substitution1, foundExprType) <- typeInference typeEnvInsideLambda expression1
+        let foundType1 = applySubstitution substitution1 (foldl (\expr fresh -> TypeArrow fresh expr) foundExprType (reverse freshVariables))
+        let sigma = generalise (applySubstitutionToTypeEnvironment substitution1 typeEnv) foundType1
+        return (substitution1, patttern, sigma)
+   in do
+        -- TODO: make the order of the lets independent.
+        list <- mapM processBody bodies
+        let newTypeEnvironment :: TypeEnvironment
+            (newTypeEnvironment, combinedSubstitution) =
+              foldl
+                ( \(typeEnv1, sub) (substitution1, functionName, sigma) ->
+                    ( Map.insert functionName sigma (Map.delete functionName (applySubstitutionToTypeEnvironment substitution1 typeEnv1)),
+                      composeSubstitution sub substitution1
+                    )
+                )
+                (typeEnv, Map.empty)
+                list
+        (substitution2, foundType2) <- typeInference newTypeEnvironment expression2
+        return (composeSubstitution substitution2 combinedSubstitution, foundType2)

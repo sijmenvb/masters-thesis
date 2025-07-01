@@ -1,3 +1,4 @@
 dist-newstyle/
 .vscode/
 test programs/presentationExamples.hs
+test programs/suggestions2.hs

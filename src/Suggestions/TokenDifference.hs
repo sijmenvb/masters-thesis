@@ -1,13 +1,20 @@
+{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
+
+{-# HLINT ignore "Avoid lambda" #-}
 module Suggestions.TokenDifference where
 
 import Control.Monad.State as State
 import Data.Foldable (minimumBy)
 import Data.Function (on)
-import Data.Map as Map
+import Data.Map as Map hiding (map)
+import Debug.Trace (trace)
+import GHC.ExecutionStack (Location (functionName))
 import Lexer.Tokens
 import Parser.ParserBase (WithSimplePos (WithSimplePos))
-import Parser.Types (Expr (..), Section (..))
+import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
+import qualified Data.Bifunctor as Bifunctor
+import Control.Applicative (optional)
 
 data Action a
   = Keep a
@@ -27,55 +34,89 @@ getActionColor action = case action of
 
 recreateOriginalWithDifferencesShow :: [Action Token] -> String
 recreateOriginalWithDifferencesShow tokensIn =
-  let recreateOriginalShow2 :: Int -> [(Token, String, Action Token)] -> String
-      recreateOriginalShow2 indentLevel tokens = case tokens of
+  let recreateOriginalShow2 :: Int -> Int -> [(Token, String, Action Token)] -> String
+      recreateOriginalShow2 indentLevel originalIndentLevel tokens = case tokens of
+        t1@(Newline, _, _) : (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel (t1 : tokensRest)
+        t1@(Newline, _, _) : (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel - 1) (t1 : tokensRest)
+        t1@(Newline, _, _) : (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) (t1 : tokensRest)
         [] -> ""
-        (Newline, color, Add _) : tokensRest -> color ++ "newline\n" ++ resetColor ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
-        (Newline, _, _) : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
-        (Indent, _, _ ) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) tokensRest
-        (Dedent, _, _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) tokensRest
-        (tok, color,_) : rpar@(Rpar, _,_) : tokensRest -> color ++ showExact tok ++ resetColor ++ recreateOriginalShow2 indentLevel (rpar : tokensRest)
-        (Lpar, color,_) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel tokensRest
-        (tok, color,_) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel tokensRest
-   in recreateOriginalShow2 0 $ Prelude.map (\tok -> (forgetAction tok, getActionColor tok,tok)) tokensIn
+        [(Newline, color, _)] -> ""
+        (Newline, color, action) : tokensRest ->
+          let indentDifference = indentLevel - originalIndentLevel
+           in ( case action of
+                  Keep _ -> "\n"
+                  _ ->
+                    color
+                      ++ "newline\n"
+                      ++ resetColor
+              )
+                ++ stringRepeat (indentLevel - max 0 indentDifference) (showExact Indent)
+                ++ ( if indentDifference < 0
+                       then redColor
+                       else greenColor
+                   )
+                ++ stringRepeat (abs indentDifference) (map (const '▇') $ showExact Indent)
+                ++ resetColor
+                ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (Indent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) originalIndentLevel tokensRest
+        (Indent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel + 1) tokensRest
+        (Indent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) (originalIndentLevel + 1) tokensRest
+        (Dedent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) originalIndentLevel tokensRest
+        (Dedent, _, Remove _) : tokensRest -> recreateOriginalShow2 indentLevel (originalIndentLevel - 1) tokensRest
+        (Dedent, _, Keep _) : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (originalIndentLevel - 1) tokensRest
+        (tok, color, _) : rpar@(Rpar, _, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel (rpar : tokensRest)
+        (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (Lambda, color, _) : tokensRest -> color ++ showExact Lambda ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+        (tok, color, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
+   in --show tokensIn ++ "\n\n" ++
+    recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
 
 instance Show a => Show (Action a) where
   show (Keep a) = whiteColor ++ show a ++ resetColor
   show (Add a) = greenColor ++ show a ++ resetColor
   show (Remove a) = redColor ++ show a ++ resetColor
 
-data ExtendedTokens
+data TargetTokens
   = Require Token
   | Optional Token (Maybe Int)
-  deriving (Ord,Eq)
+  deriving (Ord, Eq)
+
+-- | Boolean to switch the color from ansii excape code to latex syntax
+latexPrintMode :: Bool
+latexPrintMode = False
 
 -- Helper function to reset the color
 resetColor :: String
-resetColor = setSGRCode [Reset]
+resetColor = if latexPrintMode then "}@*)"
+  else setSGRCode [Reset]
 
 -- ANSI codes for white and gray
 whiteColor :: String
-whiteColor = setSGRCode [SetColor Foreground Vivid White]
+whiteColor = if latexPrintMode then "(*@\\textcolor{black}{"
+  else setSGRCode [SetColor Foreground Vivid White]
 
 grayColor :: String
-grayColor = setSGRCode [SetColor Foreground Dull Black]
+grayColor = if latexPrintMode then "(*@\\textcolor{gray}{"
+  else setSGRCode [SetColor Foreground Dull Black]
 
 greenColor :: String
-greenColor = setSGRCode [SetColor Foreground Vivid Green]
+greenColor = if latexPrintMode then "(*@\\textcolor{darkgreen}{"
+  else setSGRCode [SetColor Foreground Vivid Green]
 
 redColor :: String
-redColor = setSGRCode [SetColor Foreground Vivid Red]
+redColor = if latexPrintMode then "(*@\\textcolor{darkred}{"
+  else setSGRCode [SetColor Foreground Vivid Red]
 
-instance Show ExtendedTokens where
+instance Show TargetTokens where
   show (Require token) =
     whiteColor ++ show token ++ resetColor
   show (Optional token num) =
     grayColor ++ show token ++ show num ++ resetColor
 
-sectionToSuggestion :: Section -> ([ExtendedTokens], Int)
+sectionToSuggestion :: Section -> ([TargetTokens], Int)
 sectionToSuggestion sect = runState (createTargetTokensFromSection sect) 0
 
-createTargetTokensFromSection :: Section -> State Int [ExtendedTokens]
+createTargetTokensFromSection :: Section -> State Int [TargetTokens]
 createTargetTokensFromSection section =
   case section of
     FunctionDefinition name vars expr ->
@@ -85,7 +126,7 @@ createTargetTokensFromSection section =
         return $ Require (Name name) : varTokens ++ (Require EqualsSign : exprTokens)
     FunctionType name typ -> return []
 
-createTargetTokensFromExpr :: WithSimplePos Expr -> State Int [ExtendedTokens]
+createTargetTokensFromExpr :: WithSimplePos Expr -> State Int [TargetTokens]
 createTargetTokensFromExpr expr =
   let getId :: State Int Int
       getId =
@@ -93,6 +134,14 @@ createTargetTokensFromExpr expr =
           currentId <- get
           put (currentId + 1)
           return currentId
+
+      getNestedLambdas :: WithSimplePos Expr -> ([LabelIdentifier], WithSimplePos Expr)
+      getNestedLambdas exprIn = case exprIn of
+        -- (WithSimplePos _ _ (LambdaAbstraction argument1Name (WithSimplePos _ _ (LambdaAbstraction argument2Name expr)))) ->
+        (WithSimplePos _ _ (LambdaAbstraction argument1Name subExpr)) ->
+          let (identifiers, finalExpr) = getNestedLambdas subExpr
+           in (argument1Name : identifiers, finalExpr)
+        _ -> ([], exprIn)
    in case expr of
         (WithSimplePos _ _ (Parentheses expr1)) ->
           do
@@ -108,14 +157,53 @@ createTargetTokensFromExpr expr =
                   case expr2 of
                     (WithSimplePos _ _ (Application _ _)) -> Require Lpar : expr2Tokens ++ [Require Rpar]
                     _ -> expr2Tokens
-            return $ Optional Lpar (Just bracketId) : expr1Tokens ++ [Optional Indent (Just indentId), Optional Newline (Just indentId)] ++ argumentTokens ++ [Optional Rpar (Just bracketId), Optional Newline Nothing, Optional Dedent (Just indentId)] -- TODO: fix early dedent issue
+            return $ Optional Lpar (Just bracketId) : expr1Tokens ++ [Optional Indent (Just indentId), Optional Newline (Just indentId)] ++ argumentTokens ++ [Optional Rpar (Just bracketId), Optional Dedent (Just indentId)] -- TODO: fix early dedent issue
         (WithSimplePos _ _ (Label name)) ->
           return [Require (Name name)]
         (WithSimplePos _ _ (Int num)) ->
           return [Require (Number num)]
         (WithSimplePos _ _ (Bool b)) ->
           return [if b then Require TrueToken else Require FalseToken]
-        _ -> undefined
+        (WithSimplePos _ _ (LambdaAbstraction _ _)) -> do
+          let (arguments, exprInLambda) = getNestedLambdas expr
+          exprTokens <- createTargetTokensFromExpr exprInLambda
+          newLineId <- getId
+          let buildLambda args = case args of
+                [argumentName] -> 
+                  return $ Require (Name argumentName)  : Require RArrow : Optional Indent (Just newLineId) : Optional Newline (Just newLineId) : exprTokens 
+                (argumentName : restOfArguments) -> do
+                  lambdaID <- getId
+                  innerTokens <- buildLambda restOfArguments
+                  return $ Require (Name argumentName) : Optional RArrow (Just lambdaID) : Optional Lpar (Just lambdaID) : Optional Lambda (Just lambdaID) : innerTokens ++ [Optional Rpar (Just lambdaID)]
+
+          lambdaBody <- buildLambda arguments 
+
+          return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar, Optional Dedent (Just newLineId)] 
+        (WithSimplePos _ _ (LetExpression definitions inExpressions)) ->
+          let definitionToTokens functionName identifiers expr = do
+                let nameToken = Require (Name functionName)
+                let argumentTokens = map (\name -> Require (Name name)) identifiers
+                exprTokensOut <- createTargetTokensFromExpr expr
+                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut --our nextLine token comes before the dedent, so we strip off the last dedents so we can add them separately after the nextLine.
+                      where
+                        go (tok@(Require Dedent): xs) = Bifunctor.second (tok:) (go xs)
+                        go (tok@(Optional Dedent _): xs) = Bifunctor.second (tok:) (go xs)
+                        go xs = (reverse xs,[])
+                        
+
+                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline] ++ trailingDedents ++[Optional Newline Nothing]
+           in do
+                definitionTokens <- mapM (\(x, y, z) -> definitionToTokens x y z) definitions
+                inExpressionTokens <- createTargetTokensFromExpr inExpressions
+                newLineBeforeLetId <- getId
+                firstIndentId <- getId
+                return $
+                  [Require Indent, Require Newline, Require Let, Require Indent, Require Newline]
+                    ++ concat definitionTokens
+                    ++ [Require Dedent, Require In, Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId)]
+                    ++ inExpressionTokens
+                    ++ [Optional Dedent (Just firstIndentId), Require Dedent]
+        
 
 needsParentheses :: Expr -> Bool
 needsParentheses expr =
@@ -125,8 +213,7 @@ needsParentheses expr =
     LambdaAbstraction _ _ -> True
     _ -> False
 
-
-generateActions :: [ExtendedTokens] -> [Token] -> [Action Token]
+generateActions :: [TargetTokens] -> [Token] -> [Action Token]
 generateActions extTokensIn tokensIn =
   -- generateActions2 is heavily inspired by Levenshtein distance, probably not very efficient
   let standardWeight :: Int
@@ -144,22 +231,22 @@ generateActions extTokensIn tokensIn =
       append :: Int -> Action Token -> (Int, [Action Token]) -> (Int, [Action Token])
       append incrementAmmount actionToken (num, list) = (num + incrementAmmount, actionToken : list)
 
-      dynamicGenerateActions2 :: Map Int Bool -> [ExtendedTokens] -> [Token] -> State (Map (Map Int Bool, [ExtendedTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+      dynamicGenerateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
       dynamicGenerateActions2 foundTokens extTokens tokens = do
         answers <- get
         case Map.lookup (foundTokens, extTokens, tokens) answers of
           Just x -> pure x
           Nothing -> do
-                      x <- generateActions2 foundTokens extTokens tokens
-                      answers2 <- get 
-                      put $ Map.insert (foundTokens, extTokens, tokens) x answers2
-                      return x
+            x <- generateActions2 foundTokens extTokens tokens
+            answers2 <- get
+            put $ Map.insert (foundTokens, extTokens, tokens) x answers2
+            return x
 
-      generateActions2 :: Map Int Bool -> [ExtendedTokens] -> [Token] -> State (Map (Map Int Bool, [ExtendedTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+      generateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
       generateActions2 foundTokens extTokens tokens =
         case (extTokens, tokens) of
           -- allow for comments
-          (_, com@(Comment _)  : tokRest ) -> do
+          (_, com@(Comment _) : tokRest) -> do
             x <- dynamicGenerateActions2 foundTokens extTokens tokRest
             return $ append 0 (Keep com) x
 
@@ -181,59 +268,62 @@ generateActions extTokensIn tokensIn =
           -- both streams not empty
           (Require tok1 : extTokensRest, tok2 : tokRest)
             | tok1 == tok2 -> do
-              x <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
-              return $ append 0 (Keep tok2) x
+                x <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
+                return $ append 0 (Keep tok2) x
           (Require tok1 : extTokensRest, tok2 : tokRest) -> do
             x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
             x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
             x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-            return $  minimumBy
-              (compare `on` fst)
-              [ 
-                append standardWeight (Add tok1) x2, -- add a missing token
-                append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
-                append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
-              ]
+            return $
+              minimumBy
+                (compare `on` fst)
+                [ append standardWeight (Add tok1) x2, -- add a missing token
+                  append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
+                  append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
+                ]
           (Optional tok1 Nothing : extTokensRest, tok2 : tokRest)
             | tok1 == tok2 -> do
-              x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
-              x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
-              x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-              return $  minimumBy
-                  (compare `on` fst)
-                  [ append 0 (Keep tok2) x1, -- use the optional token.
-                    x2, -- do not use the optional token
-                    append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
-                  ]
+                x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
+                x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
+                x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
+                return $
+                  minimumBy
+                    (compare `on` fst)
+                    [ append 0 (Keep tok2) x1, -- use the optional token.
+                      x2, -- do not use the optional token
+                      append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
+                    ]
           (Optional _ Nothing : extTokensRest, tok2 : tokRest) -> do
             x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
             x2 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-            return $ minimumBy
-              (compare `on` fst)
-              [ x1 , -- do not use the optional token
-                append (getTokenRemovalWeight tok2) (Remove tok2) x2  -- remove the extra token
-              ]
+            return $
+              minimumBy
+                (compare `on` fst)
+                [ x1, -- do not use the optional token
+                  append (getTokenRemovalWeight tok2) (Remove tok2) x2 -- remove the extra token
+                ]
           (Optional tok1 (Just id) : extTokensRest, tok2 : tokRest) ->
             case (Map.lookup id foundTokens, tok1 == tok2) of
               (Nothing, True) -> do
                 x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
                 x2 <- dynamicGenerateActions2 (Map.insert id True foundTokens) extTokensRest tokRest
                 x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-                return $ minimumBy
-                  (compare `on` fst)
-                  [ x1 , -- use the optional token.
-                    append 0 (Keep tok2) x2, -- do not use the optional token
-                    append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
-                  ]
+                return $
+                  minimumBy
+                    (compare `on` fst)
+                    [ x1, -- use the optional token.
+                      append 0 (Keep tok2) x2, -- do not use the optional token
+                      append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
+                    ]
               (Nothing, False) -> do
                 x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
                 x2 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-                return $ minimumBy
-                  (compare `on` fst)
-                  [ x1, -- do not use the optional token
-                    append (getTokenRemovalWeight tok2) (Remove tok2) x2  -- remove the extra token
-                  ]
+                return $
+                  minimumBy
+                    (compare `on` fst)
+                    [ x1, -- do not use the optional token
+                      append (getTokenRemovalWeight tok2) (Remove tok2) x2 -- remove the extra token
+                    ]
               (Just True, _) -> dynamicGenerateActions2 foundTokens (Require tok1 : extTokensRest) tokens -- require the optional token
               (Just False, _) -> dynamicGenerateActions2 foundTokens extTokensRest tokens -- skip the optional token
-   in
-    snd $ fst $ State.runState (dynamicGenerateActions2 Map.empty extTokensIn tokensIn) Map.empty
+   in snd $ fst $ State.runState (dynamicGenerateActions2 Map.empty extTokensIn tokensIn) Map.empty

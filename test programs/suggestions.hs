@@ -24,7 +24,7 @@ fun9 :: Int
 fun9 = plus plus 3 plus 4 5 plus 4) 5
 
 
-flipNum :: Bool -> Char -> Int
+flipNum :: Bool -> Int -> Int
 
 
 
