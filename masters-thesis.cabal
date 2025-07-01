@@ -116,6 +116,7 @@ executable masters-thesis
     , text
     , utf8-string  >=1
     , ansi-terminal
+    , regex-compat
 
   -- Directories containing source files.
   hs-source-dirs:     app

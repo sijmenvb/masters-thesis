@@ -102,7 +102,7 @@ fun =
     let
         x = 5
     in  plus 7 7)
-|] `shouldBe` "fun = \n1    let \n2        x = 5 \n1    in plus 7 7 , Int"
+|] `shouldBe` "fun = \n    let \n        x = 5 \n    in plus 7 7 , Int"
 
   it "acknowledging lets and process types" $ do
     runSuggestion [r|
@@ -110,7 +110,7 @@ fun =
     let
         x = 5
     in  plus x x)
-|] `shouldBe` "fun = \n1    let \n2        x = 5 \n1    in plus x x , Int"
+|] `shouldBe` "fun = \n    let \n        x = 5 \n    in plus x x , Int"
 
   it "dependencies of lets" $ do
     runSuggestion [r|
@@ -120,7 +120,7 @@ fun x =
         fun3 = plus x fun2
     in 
         fun3)
-|] `shouldBe` "fun x = \n1    let \n2        fun2 = 5 \n2        fun3 = plus x fun2 \n1    in \n2        fun3 , (Int -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun2 = 5 \n        fun3 = plus x fun2 \n    in \n        fun3 , (Int -> Int)"
   
   it "dependencies of lets (other oder)" $ do
     runSuggestion [r|
@@ -130,7 +130,7 @@ fun x =
         fun2 = 5
     in 
         fun3)
-|] `shouldBe` "fun x = \n1    let \n2        fun3 = plus x fun2 \n2        fun2 = 5 \n1    in \n2        fun3 , (Int -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun3 = plus x fun2 \n        fun2 = 5 \n    in \n        fun3 , (Int -> Int)"
 
 
   it "getting type information from the other definitions" $ do
@@ -141,7 +141,7 @@ fun x =
         fun3 = plus x 5
     in 
         fun3
-|] `shouldBe` "fun x = \n1    let \n2        fun2 = plus fun3 (invertNum True x) \n2        fun3 = plus x 5 \n1    in \n2        fun3 , (Int -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun2 = plus fun3 (invertNum True x) \n        fun3 = plus x 5 \n    in \n        fun3 , (Int -> Int)"
 
 
   it "getting type information from the other definitions (other order)" $ do
@@ -152,7 +152,7 @@ fun x =
         fun2 = plus fun3 invertNum x True
     in 
         fun3
-|] `shouldBe` "fun x = \n1    let \n2        fun3 = plus x 5 \n2        fun2 = plus fun3 (invertNum True x) \n1    in \n2        fun3 , (Int -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun3 = plus x 5 \n        fun2 = plus fun3 (invertNum True x) \n    in \n        fun3 , (Int -> Int)"
 
 
   it "type information is gotten top down in undecidable cases" $ do
@@ -163,7 +163,7 @@ fun x =
         fun2 = invertNum x True
     in 
         fun3
-|] `shouldBe` "fun x = \n1    let \n2        fun3 = plus x 5 \n2        fun2 = invertNum True x \n1    in \n2        fun3 , (Int -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun3 = plus x 5 \n        fun2 = invertNum True x \n    in \n        fun3 , (Int -> Int)"
 
   it "type information is gotten top down in undecidable cases (the one that doesn't work)" $ do
     take 51 (runSuggestion [r|
@@ -173,7 +173,7 @@ fun x =
         fun3 = plus x 5
     in 
         fun3
-|] )`shouldNotBe` "fun x = \n1    let \n2        fun2 = invertNum True x"
+|] )`shouldNotBe` "fun x = \n    let \n        fun2 = invertNum True x"
 
 
   it "weird indentation" $ do
@@ -185,7 +185,7 @@ fun x =
               fun4 = True
     in 
         fun3
-|] `shouldBe` "fun x = \n1    let \n2        fun3 = 4 \n2        fun2 = 5 \n2        fun4 = True \n1    in \n2        fun3 , (v8 -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun3 = 4 \n        fun2 = 5 \n        fun4 = True \n    in \n        fun3 , (v8 -> Int)"
 
   it "weird indentation 2" $ do
     runSuggestion [r|
@@ -196,7 +196,7 @@ fun x =
           fun4 = True
     in 
         fun3
-|] `shouldBe` "fun x = \n1    let \n2        fun3 = 4 \n2        fun2 = 5 \n2        fun4 = True \n1    in \n2        fun3 , (v8 -> Int)"
+|] `shouldBe` "fun x = \n    let \n        fun3 = 4 \n        fun2 = 5 \n        fun4 = True \n    in \n        fun3 , (v8 -> Int)"
 
   it "nested lets" $ do
     runSuggestion [r|
@@ -208,7 +208,7 @@ fun x y =
         vare = 5
     in
         5)
-|] `shouldBe` "fun x y = \n1    let \n2        fun a b = plus a b \n2        var = \n3            let \n4                plus x y = x \n3            in x \n2        vare = 5 \n1    in \n2        5 , (v24 -> (v12 -> Int))"
+|] `shouldBe` "fun x y = \n    let \n        fun a b = plus a b \n        var = \n            let \n                plus x y = x \n            in x \n        vare = 5 \n    in \n        5 , (v24 -> (v12 -> Int))"
 
   it "weird trailing symbols" $ do -- note that there might be correct parenthesis that remain unconsumed 
     runSuggestion [r|
@@ -217,7 +217,7 @@ fun x y =
         var3 = plus 5 (plus 5 5) -> (
     in 
         var3
-|] `shouldBe` "fun x y = \n1    let \n2        var3 = plus 5 (plus 5 5) \n1    in \n2        var3 , (v10 -> (v12 -> Int))"
+|] `shouldBe` "fun x y = \n    let \n        var3 = plus 5 (plus 5 5) \n    in \n        var3 , (v10 -> (v12 -> Int))"
 
   it "branching and un-branching" $ do -- this refers to not loosing fun3 once we "jump"(/branch) to do fun4
     runSuggestion [r|
@@ -231,7 +231,7 @@ fun x y =
         fun4 a b = plus a b 
     in 
         var3)
-|] `shouldBe` "fun x y = \n1    let \n2        var3 = \n3            let \n4                fun3 = plus \n3            in \n4                fun4 5 (fun3 5 5) \n2        fun4 a b = plus a b \n1    in \n2        var3 , (v10 -> (v12 -> Int))"
+|] `shouldBe` "fun x y = \n    let \n        var3 = \n            let \n                fun3 = plus \n            in \n                fun4 5 (fun3 5 5) \n        fun4 a b = plus a b \n    in \n        var3 , (v10 -> (v12 -> Int))"
 
 
 

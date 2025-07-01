@@ -45,9 +45,9 @@ in short suggestions are generated as follows.
 ## Requirements
 for generating our suggestions we have some soft and hard requirements
 ### Soft
-if there was one mistake the
+if there was one mistake the suggestion should be able to fix it.
 ### Hard
-If we take a valid function as a String and append a `)` to the end then giving this to the suggestion should generate the original string. (indentation might be slightly different, e.g. using 3 spaces instead of four) 
+If we take a valid function as a String and append a `(` to the end then giving this to the suggestion should generate the original string. (indentation might be slightly different, e.g. using 3 spaces instead of four) 
 ## generateSuggestion
 `generateSuggestion :: Int -> Map.Map String Type -> [TokenInfo] -> MaybeError ([ExtendedTokens], String, String, Type, Int)`
 is responsible for generating suggestions for function definitions. 

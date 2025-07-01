@@ -166,7 +166,7 @@ recreateOriginalShow tokensIn =
       recreateOriginalShow2 indentLevel tokens = case tokens of
         Newline : Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) (Newline:tokensRest)
         [] -> ""
-        Newline : tokensRest -> "\n" ++ show indentLevel++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
+        Newline : tokensRest -> "\n" ++ stringRepeat indentLevel (showExact Indent) ++ recreateOriginalShow2 indentLevel tokensRest
         Indent : tokensRest -> recreateOriginalShow2 (indentLevel + 1) tokensRest
         Dedent : tokensRest -> recreateOriginalShow2 (indentLevel - 1) tokensRest
         tok : Rpar : tokensRest -> showExact tok ++ recreateOriginalShow2 indentLevel (Rpar : tokensRest)

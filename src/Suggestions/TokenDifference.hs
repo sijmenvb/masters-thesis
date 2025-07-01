@@ -55,7 +55,7 @@ recreateOriginalWithDifferencesShow tokensIn =
                        then redColor
                        else greenColor
                    )
-                ++ stringRepeat (abs indentDifference) (map (const '▇') $ showExact Indent) -- TODO: fix this propperly
+                ++ stringRepeat (abs indentDifference) (map (const '▇') $ showExact Indent)
                 ++ resetColor
                 ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (Indent, _, Add _) : tokensRest -> recreateOriginalShow2 (indentLevel + 1) originalIndentLevel tokensRest
@@ -68,7 +68,8 @@ recreateOriginalWithDifferencesShow tokensIn =
         (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (Lambda, color, _) : tokensRest -> color ++ showExact Lambda ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (tok, color, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
-   in show tokensIn ++ "\n\n" ++ recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
+   in --show tokensIn ++ "\n\n" ++
+    recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
 
 instance Show a => Show (Action a) where
   show (Keep a) = whiteColor ++ show a ++ resetColor
@@ -80,22 +81,31 @@ data TargetTokens
   | Optional Token (Maybe Int)
   deriving (Ord, Eq)
 
+-- | Boolean to switch the color from ansii excape code to latex syntax
+latexPrintMode :: Bool
+latexPrintMode = False
+
 -- Helper function to reset the color
 resetColor :: String
-resetColor = setSGRCode [Reset]
+resetColor = if latexPrintMode then "}@*)"
+  else setSGRCode [Reset]
 
 -- ANSI codes for white and gray
 whiteColor :: String
-whiteColor = setSGRCode [SetColor Foreground Vivid White]
+whiteColor = if latexPrintMode then "(*@\\textcolor{black}{"
+  else setSGRCode [SetColor Foreground Vivid White]
 
 grayColor :: String
-grayColor = setSGRCode [SetColor Foreground Dull Black]
+grayColor = if latexPrintMode then "(*@\\textcolor{gray}{"
+  else setSGRCode [SetColor Foreground Dull Black]
 
 greenColor :: String
-greenColor = setSGRCode [SetColor Foreground Vivid Green]
+greenColor = if latexPrintMode then "(*@\\textcolor{darkgreen}{"
+  else setSGRCode [SetColor Foreground Vivid Green]
 
 redColor :: String
-redColor = setSGRCode [SetColor Foreground Vivid Red]
+redColor = if latexPrintMode then "(*@\\textcolor{darkred}{"
+  else setSGRCode [SetColor Foreground Vivid Red]
 
 instance Show TargetTokens where
   show (Require token) =
