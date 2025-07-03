@@ -3,7 +3,10 @@
 {-# HLINT ignore "Avoid lambda" #-}
 module Suggestions.TokenDifference where
 
+import Control.Applicative (optional)
 import Control.Monad.State as State
+import Data.Array (accum)
+import qualified Data.Bifunctor as Bifunctor
 import Data.Foldable (minimumBy)
 import Data.Function (on)
 import Data.Map as Map hiding (map)
@@ -13,8 +16,6 @@ import Lexer.Tokens
 import Parser.ParserBase (WithSimplePos (WithSimplePos))
 import Parser.Types (Expr (..), LabelIdentifier, Section (..))
 import System.Console.ANSI
-import qualified Data.Bifunctor as Bifunctor
-import Control.Applicative (optional)
 
 data Action a
   = Keep a
@@ -68,8 +69,8 @@ recreateOriginalWithDifferencesShow tokensIn =
         (Lpar, color, _) : tokensRest -> color ++ showExact Lpar ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (Lambda, color, _) : tokensRest -> color ++ showExact Lambda ++ resetColor ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
         (tok, color, _) : tokensRest -> color ++ showExact tok ++ resetColor ++ " " ++ recreateOriginalShow2 indentLevel originalIndentLevel tokensRest
-   in --show tokensIn ++ "\n\n" ++
-    recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
+   in -- show tokensIn ++ "\n\n" ++
+      recreateOriginalShow2 0 0 (Prelude.map (\tok -> (forgetAction tok, getActionColor tok, tok)) tokensIn)
 
 instance Show a => Show (Action a) where
   show (Keep a) = whiteColor ++ show a ++ resetColor
@@ -87,25 +88,35 @@ latexPrintMode = False
 
 -- Helper function to reset the color
 resetColor :: String
-resetColor = if latexPrintMode then "}@*)"
-  else setSGRCode [Reset]
+resetColor =
+  if latexPrintMode
+    then "}@*)"
+    else setSGRCode [Reset]
 
 -- ANSI codes for white and gray
 whiteColor :: String
-whiteColor = if latexPrintMode then "(*@\\textcolor{black}{"
-  else setSGRCode [SetColor Foreground Vivid White]
+whiteColor =
+  if latexPrintMode
+    then "(*@\\textcolor{black}{"
+    else setSGRCode [SetColor Foreground Vivid White]
 
 grayColor :: String
-grayColor = if latexPrintMode then "(*@\\textcolor{gray}{"
-  else setSGRCode [SetColor Foreground Dull Black]
+grayColor =
+  if latexPrintMode
+    then "(*@\\textcolor{gray}{"
+    else setSGRCode [SetColor Foreground Dull Black]
 
 greenColor :: String
-greenColor = if latexPrintMode then "(*@\\textcolor{darkgreen}{"
-  else setSGRCode [SetColor Foreground Vivid Green]
+greenColor =
+  if latexPrintMode
+    then "(*@\\textcolor{darkgreen}{"
+    else setSGRCode [SetColor Foreground Vivid Green]
 
 redColor :: String
-redColor = if latexPrintMode then "(*@\\textcolor{darkred}{"
-  else setSGRCode [SetColor Foreground Vivid Red]
+redColor =
+  if latexPrintMode
+    then "(*@\\textcolor{darkred}{"
+    else setSGRCode [SetColor Foreground Vivid Red]
 
 instance Show TargetTokens where
   show (Require token) =
@@ -169,29 +180,28 @@ createTargetTokensFromExpr expr =
           exprTokens <- createTargetTokensFromExpr exprInLambda
           newLineId <- getId
           let buildLambda args = case args of
-                [argumentName] -> 
-                  return $ Require (Name argumentName)  : Require RArrow : Optional Indent (Just newLineId) : Optional Newline (Just newLineId) : exprTokens 
+                [argumentName] ->
+                  return $ Require (Name argumentName) : Require RArrow : Optional Indent (Just newLineId) : Optional Newline (Just newLineId) : exprTokens
                 (argumentName : restOfArguments) -> do
                   lambdaID <- getId
                   innerTokens <- buildLambda restOfArguments
                   return $ Require (Name argumentName) : Optional RArrow (Just lambdaID) : Optional Lpar (Just lambdaID) : Optional Lambda (Just lambdaID) : innerTokens ++ [Optional Rpar (Just lambdaID)]
 
-          lambdaBody <- buildLambda arguments 
+          lambdaBody <- buildLambda arguments
 
-          return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar, Optional Dedent (Just newLineId)] 
+          return $ Require Lpar : Require Lambda : lambdaBody ++ [Require Rpar, Optional Dedent (Just newLineId)]
         (WithSimplePos _ _ (LetExpression definitions inExpressions)) ->
           let definitionToTokens functionName identifiers expr = do
                 let nameToken = Require (Name functionName)
                 let argumentTokens = map (\name -> Require (Name name)) identifiers
                 exprTokensOut <- createTargetTokensFromExpr expr
-                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut --our nextLine token comes before the dedent, so we strip off the last dedents so we can add them separately after the nextLine.
+                let (exprTokens, trailingDedents) = go $ reverse exprTokensOut -- our nextLine token comes before the dedent, so we strip off the last dedents so we can add them separately after the nextLine.
                       where
-                        go (tok@(Require Dedent): xs) = Bifunctor.second (tok:) (go xs)
-                        go (tok@(Optional Dedent _): xs) = Bifunctor.second (tok:) (go xs)
-                        go xs = (reverse xs,[])
-                        
+                        go (tok@(Require Dedent) : xs) = Bifunctor.second (tok :) (go xs)
+                        go (tok@(Optional Dedent _) : xs) = Bifunctor.second (tok :) (go xs)
+                        go xs = (reverse xs, [])
 
-                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline] ++ trailingDedents ++[Optional Newline Nothing]
+                return $ nameToken : argumentTokens ++ [Require EqualsSign] ++ exprTokens ++ [Require Newline] ++ trailingDedents ++ [Optional Newline Nothing]
            in do
                 definitionTokens <- mapM (\(x, y, z) -> definitionToTokens x y z) definitions
                 inExpressionTokens <- createTargetTokensFromExpr inExpressions
@@ -203,7 +213,6 @@ createTargetTokensFromExpr expr =
                     ++ [Require Dedent, Require In, Optional Indent (Just firstIndentId), Optional Newline (Just firstIndentId)]
                     ++ inExpressionTokens
                     ++ [Optional Dedent (Just firstIndentId), Require Dedent]
-        
 
 needsParentheses :: Expr -> Bool
 needsParentheses expr =
@@ -213,110 +222,102 @@ needsParentheses expr =
     LambdaAbstraction _ _ -> True
     _ -> False
 
+-- | since the proper token diffing is so slow we have an option to bypass it so we can measure the performance of the rest of the system.
+bypassGenerateActionsForPerformance :: Bool
+bypassGenerateActionsForPerformance = True
+
 generateActions :: [TargetTokens] -> [Token] -> [Action Token]
 generateActions extTokensIn tokensIn =
-  -- generateActions2 is heavily inspired by Levenshtein distance, probably not very efficient
-  let standardWeight :: Int
-      standardWeight = 10
+  if bypassGenerateActionsForPerformance
+    then
+      Prelude.foldr
+        ( \item acc -> case item of
+            Require a -> Keep a : acc
+            Optional _ _ -> acc
+        )
+        []
+        extTokensIn
+    else -- generateActions2 is heavily inspired by Levenshtein distance, probably not very efficient
 
-      -- getTokenRemovalWeight used to make removing certain tokens more expensive. for example when you want to swap the number 3 and a parenthesis remove and add the parenthesis not the number.
-      getTokenRemovalWeight :: Token -> Int
-      getTokenRemovalWeight tok = case tok of
-        Name _ -> 15
-        Number _ -> 15
-        Indent -> standardWeight `div` 2
-        _ -> standardWeight
+      let standardWeight :: Int
+          standardWeight = 10
 
-      -- append is probably a terrible name
-      append :: Int -> Action Token -> (Int, [Action Token]) -> (Int, [Action Token])
-      append incrementAmmount actionToken (num, list) = (num + incrementAmmount, actionToken : list)
+          -- getTokenRemovalWeight used to make removing certain tokens more expensive. for example when you want to swap the number 3 and a parenthesis remove and add the parenthesis not the number.
+          getTokenRemovalWeight :: Token -> Int
+          getTokenRemovalWeight tok = case tok of
+            Name _ -> 15
+            Number _ -> 15
+            Indent -> standardWeight `div` 2
+            _ -> standardWeight
 
-      dynamicGenerateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
-      dynamicGenerateActions2 foundTokens extTokens tokens = do
-        answers <- get
-        case Map.lookup (foundTokens, extTokens, tokens) answers of
-          Just x -> pure x
-          Nothing -> do
-            x <- generateActions2 foundTokens extTokens tokens
-            answers2 <- get
-            put $ Map.insert (foundTokens, extTokens, tokens) x answers2
-            return x
+          -- append is probably a terrible name
+          append :: Int -> Action Token -> (Int, [Action Token]) -> (Int, [Action Token])
+          append incrementAmmount actionToken (num, list) = (num + incrementAmmount, actionToken : list)
 
-      generateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
-      generateActions2 foundTokens extTokens tokens =
-        case (extTokens, tokens) of
-          -- allow for comments
-          (_, com@(Comment _) : tokRest) -> do
-            x <- dynamicGenerateActions2 foundTokens extTokens tokRest
-            return $ append 0 (Keep com) x
+          dynamicGenerateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+          dynamicGenerateActions2 foundTokens extTokens tokens = do
+            answers <- get
+            case Map.lookup (foundTokens, extTokens, tokens) answers of
+              Just x -> pure x
+              Nothing -> do
+                x <- generateActions2 foundTokens extTokens tokens
+                answers2 <- get
+                put $ Map.insert (foundTokens, extTokens, tokens) x answers2
+                return x
 
-          -- both lists empty
-          ([], []) -> return (0, [])
-          -- token stream empty
-          (Require tok1 : extTokensRest, []) -> do
-            x <- dynamicGenerateActions2 foundTokens extTokensRest []
-            return $ append standardWeight (Add tok1) x
-          (Optional _ Nothing : extTokensRest, []) -> dynamicGenerateActions2 foundTokens extTokensRest []
-          (Optional tok1 (Just id) : extTokensRest, []) ->
-            case Map.lookup id foundTokens of
-              Just True -> dynamicGenerateActions2 foundTokens (Require tok1 : extTokensRest) tokens
-              _ -> dynamicGenerateActions2 foundTokens extTokensRest []
-          -- expected token stream empty
-          ([], tok2 : tokRest) -> do
-            x <- dynamicGenerateActions2 foundTokens [] tokRest
-            return $ append (getTokenRemovalWeight tok2) (Remove tok2) x
-          -- both streams not empty
-          (Require tok1 : extTokensRest, tok2 : tokRest)
-            | tok1 == tok2 -> do
-                x <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
-                return $ append 0 (Keep tok2) x
-          (Require tok1 : extTokensRest, tok2 : tokRest) -> do
-            x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
-            x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
-            x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-            return $
-              minimumBy
-                (compare `on` fst)
-                [ append standardWeight (Add tok1) x2, -- add a missing token
-                  append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
-                  append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
-                ]
-          (Optional tok1 Nothing : extTokensRest, tok2 : tokRest)
-            | tok1 == tok2 -> do
+          generateActions2 :: Map Int Bool -> [TargetTokens] -> [Token] -> State (Map (Map Int Bool, [TargetTokens], [Token]) (Int, [Action Token])) (Int, [Action Token])
+          generateActions2 foundTokens extTokens tokens =
+            case (extTokens, tokens) of
+              -- allow for comments
+              (_, com@(Comment _) : tokRest) -> do
+                x <- dynamicGenerateActions2 foundTokens extTokens tokRest
+                return $ append 0 (Keep com) x
+
+              -- both lists empty
+              ([], []) -> return (0, [])
+              -- token stream empty
+              (Require tok1 : extTokensRest, []) -> do
+                x <- dynamicGenerateActions2 foundTokens extTokensRest []
+                return $ append standardWeight (Add tok1) x
+              (Optional _ Nothing : extTokensRest, []) -> dynamicGenerateActions2 foundTokens extTokensRest []
+              (Optional tok1 (Just id) : extTokensRest, []) ->
+                case Map.lookup id foundTokens of
+                  Just True -> dynamicGenerateActions2 foundTokens (Require tok1 : extTokensRest) tokens
+                  _ -> dynamicGenerateActions2 foundTokens extTokensRest []
+              -- expected token stream empty
+              ([], tok2 : tokRest) -> do
+                x <- dynamicGenerateActions2 foundTokens [] tokRest
+                return $ append (getTokenRemovalWeight tok2) (Remove tok2) x
+              -- both streams not empty
+              (Require tok1 : extTokensRest, tok2 : tokRest)
+                | tok1 == tok2 -> do
+                    x <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
+                    return $ append 0 (Keep tok2) x
+              (Require tok1 : extTokensRest, tok2 : tokRest) -> do
                 x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
                 x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
                 x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
                 return $
                   minimumBy
                     (compare `on` fst)
-                    [ append 0 (Keep tok2) x1, -- use the optional token.
-                      x2, -- do not use the optional token
+                    [ append standardWeight (Add tok1) x2, -- add a missing token
+                      append (getTokenRemovalWeight tok2) (Remove tok2) $ append standardWeight (Add tok1) x1, -- replace current token by the new one.
                       append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
                     ]
-          (Optional _ Nothing : extTokensRest, tok2 : tokRest) -> do
-            x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
-            x2 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-            return $
-              minimumBy
-                (compare `on` fst)
-                [ x1, -- do not use the optional token
-                  append (getTokenRemovalWeight tok2) (Remove tok2) x2 -- remove the extra token
-                ]
-          (Optional tok1 (Just id) : extTokensRest, tok2 : tokRest) ->
-            case (Map.lookup id foundTokens, tok1 == tok2) of
-              (Nothing, True) -> do
-                x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
-                x2 <- dynamicGenerateActions2 (Map.insert id True foundTokens) extTokensRest tokRest
-                x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
-                return $
-                  minimumBy
-                    (compare `on` fst)
-                    [ x1, -- use the optional token.
-                      append 0 (Keep tok2) x2, -- do not use the optional token
-                      append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
-                    ]
-              (Nothing, False) -> do
-                x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
+              (Optional tok1 Nothing : extTokensRest, tok2 : tokRest)
+                | tok1 == tok2 -> do
+                    x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokRest
+                    x2 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
+                    x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
+                    return $
+                      minimumBy
+                        (compare `on` fst)
+                        [ append 0 (Keep tok2) x1, -- use the optional token.
+                          x2, -- do not use the optional token
+                          append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
+                        ]
+              (Optional _ Nothing : extTokensRest, tok2 : tokRest) -> do
+                x1 <- dynamicGenerateActions2 foundTokens extTokensRest tokens
                 x2 <- dynamicGenerateActions2 foundTokens extTokens tokRest
                 return $
                   minimumBy
@@ -324,6 +325,28 @@ generateActions extTokensIn tokensIn =
                     [ x1, -- do not use the optional token
                       append (getTokenRemovalWeight tok2) (Remove tok2) x2 -- remove the extra token
                     ]
-              (Just True, _) -> dynamicGenerateActions2 foundTokens (Require tok1 : extTokensRest) tokens -- require the optional token
-              (Just False, _) -> dynamicGenerateActions2 foundTokens extTokensRest tokens -- skip the optional token
-   in snd $ fst $ State.runState (dynamicGenerateActions2 Map.empty extTokensIn tokensIn) Map.empty
+              (Optional tok1 (Just id) : extTokensRest, tok2 : tokRest) ->
+                case (Map.lookup id foundTokens, tok1 == tok2) of
+                  (Nothing, True) -> do
+                    x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
+                    x2 <- dynamicGenerateActions2 (Map.insert id True foundTokens) extTokensRest tokRest
+                    x3 <- dynamicGenerateActions2 foundTokens extTokens tokRest
+                    return $
+                      minimumBy
+                        (compare `on` fst)
+                        [ x1, -- use the optional token.
+                          append 0 (Keep tok2) x2, -- do not use the optional token
+                          append (getTokenRemovalWeight tok2) (Remove tok2) x3 -- remove the extra token
+                        ]
+                  (Nothing, False) -> do
+                    x1 <- dynamicGenerateActions2 (Map.insert id False foundTokens) extTokensRest tokens
+                    x2 <- dynamicGenerateActions2 foundTokens extTokens tokRest
+                    return $
+                      minimumBy
+                        (compare `on` fst)
+                        [ x1, -- do not use the optional token
+                          append (getTokenRemovalWeight tok2) (Remove tok2) x2 -- remove the extra token
+                        ]
+                  (Just True, _) -> dynamicGenerateActions2 foundTokens (Require tok1 : extTokensRest) tokens -- require the optional token
+                  (Just False, _) -> dynamicGenerateActions2 foundTokens extTokensRest tokens -- skip the optional token
+       in snd $ fst $ State.runState (dynamicGenerateActions2 Map.empty extTokensIn tokensIn) Map.empty
