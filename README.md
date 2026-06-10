@@ -61,4 +61,4 @@ to run the test cases.
 
 
 # A bunch of examples:
-TODO: add a bunch of examples here.
+see chapter 2 of Master_Thesis_Sijmen.pdf
