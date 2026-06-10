@@ -1,3 +1,5 @@
+for the full thesis see Master_Thesis_Sijmen.pdf
+
 # Type driven code suggestions
 In this project we provide a proof of concept for generating code suggestions for invalid programs.
 
